@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for AVAudioEngine to open the microphone. Under the hardened
+	     runtime its absence causes the access request to fail silently, before
+	     TCC is ever consulted — so the app never even appears in
+	     System Settings → Privacy & Security → Microphone. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+
+	<!-- Not sandboxed: the whole point of the app is to post synthetic keystrokes
+	     into other applications and observe a modifier key system-wide, neither of
+	     which is possible inside the App Sandbox. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>

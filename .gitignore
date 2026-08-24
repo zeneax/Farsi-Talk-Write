@@ -1,0 +1,37 @@
+# Build output — includes compiled binaries and signed .app bundles
+build/
+*.o
+*.dSYM/
+
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Signing material — must never be committed.
+# The code-signing certificate lives in the login keychain; recreate it with
+# `make signing-cert` rather than sharing it.
+*.p12
+*.pem
+*.key
+*.cer
+*.certSigningRequest
+
+# Runtime data. These live in ~/.config/farsitalkwrite/ and should never appear
+# here, but are listed so a stray copy cannot be committed by accident:
+#   config.json          — settings (no secrets, but machine-specific)
+#   farsitalkwrite.log   — may contain transcribed text
+#   pending/*.wav        — recorded audio
+config.json
+farsitalkwrite.log
+pending/
+*.wav
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Editors
+.vscode/
+.idea/
+*.swp
