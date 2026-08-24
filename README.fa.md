@@ -152,8 +152,8 @@
 <div dir="ltr">
 
 ```sh
-git clone <this repo>
-cd FarsiTalkWrite
+git clone https://github.com/zeneax/Farsi-Talk-Write.git
+cd Farsi-Talk-Write
 
 make doctor          # بررسی سلامت ابزارها
 make signing-cert    # یک‌بار — توضیح در ادامه
@@ -312,6 +312,6 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
 
 ## مجوز
 
-MIT
+MIT © ۲۰۲۶ Zeneax Lab by Shahram Mazar
 
 </div>

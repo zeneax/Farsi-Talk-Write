@@ -153,8 +153,8 @@ No Xcode.app, no SwiftPM, no external dependencies.
 ## Install
 
 ```sh
-git clone <this repo>
-cd FarsiTalkWrite
+git clone https://github.com/zeneax/Farsi-Talk-Write.git
+cd Farsi-Talk-Write
 
 make doctor          # verify the toolchain compiles
 make signing-cert    # once — see "Signing" below
@@ -313,4 +313,4 @@ several non-obvious implementation choices.
 
 ## Licence
 
-MIT
+MIT © 2026 Zeneax Lab by Shahram Mazar
