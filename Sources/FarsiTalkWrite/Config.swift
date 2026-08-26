@@ -202,11 +202,16 @@ struct InsertionConfig: Codable {
     /// are listed. Add a bundle-id fragment here if a specific app misbehaves.
     var skipBidiForApps: [String] = [
         "terminal", "iterm", "kitty", "alacritty", "ghostty",
-        // Claude Code's input field escapes the marks to visible "\u2068" text.
-        // VS Code's *editor* renders them correctly, so this targets the one app
-        // that misbehaves rather than the whole category — an earlier attempt at
-        // the category reintroduced the word-reordering bug everywhere.
-        "anthropic.claude",
+        // VS Code, which also hosts Claude Code — so an agent chat and the editor
+        // share one bundle identifier and cannot be told apart here. Both escape
+        // the marks to visible "\u200F" text.
+        //
+        // The marks only affect *visual* rendering; logical order is always
+        // correct. Text destined for a file, a terminal or a model therefore loses
+        // nothing by going plain, whereas visible escapes are pure noise. Apps
+        // where a human reads mixed Persian and English — Notes, Slack, Safari,
+        // Pages — keep the marks and keep correct placement.
+        "vscode", "vscodium", "cursor", "windsurf", "anthropic.claude",
     ]
 
     /// Whether the isolation marks should be applied when pasting into this app.
