@@ -4,8 +4,9 @@
 
 **Push-to-talk dictation for macOS that actually speaks Persian.**
 
-Press 🌐 three times, say what you're thinking, and clean Farsi text appears at your
-cursor — in a browser textarea, Notes, Slack, a terminal, anywhere you can type.
+Press **⇧🌐**, say what you're thinking, and clean Farsi text appears at your cursor
+— in a browser textarea, Notes, Slack, a terminal, anywhere you can type. A plain 🌐
+press still switches your keyboard language, so nothing is taken away from you.
 
 macOS dictation has never supported Persian. FarsiTalkWrite captures the audio
 itself and sends it to a model that does, then handles the parts everyone else gets
@@ -35,14 +36,14 @@ All three are addressed here.
 
 ### Dictation
 
-- **Two triggers** — triple-press the 🌐/fn key, or click the menu bar / Dock icon.
-  Both are independent, so the app is usable even before keyboard permissions are
-  granted.
+- **⇧🌐 by default, and it shares the key.** macOS assigns no meaning to that
+  combination, so a plain 🌐 press keeps switching your input source. Most dictation
+  tools make you sacrifice the key entirely; this one doesn't.
+- **Four trigger modes** — ⇧ + key, triple-press, hold-to-talk, or hold for 1.2s.
+  Plus menu bar / Dock only, which needs no keyboard permission at all.
+- **Retargetable key** — 🌐 by default, or Right ⌘ / Right ⌥ / any modifier.
 - **Three stop conditions** — press again, stop talking (2.5s of silence), or hit
-  the 60-second cap. It can never get stuck recording.
-- **Hold-to-talk mode** as an alternative to press-to-toggle.
-- **Retargetable trigger key** — 🌐 by default, or Right ⌘ / Right ⌥ / any modifier
-  if the Globe key is inconvenient.
+  the 30-second cap. It can never get stuck recording.
 - **Inserts wherever your cursor is.** Remembers which app was frontmost when the
   trigger fired and restores focus before pasting, so clicking a menu never sends
   your text to the wrong window.
@@ -68,8 +69,11 @@ Persian has no capitalisation, English has no نیم‌فاصله.
   to the visual start.
 - Multi-word runs stay intact (*Claude Code*), version numbers survive
   (*Xcode 16.2*), and trailing punctuation is never swallowed into an isolate.
-- Pure Persian and pure English get **no invisible characters at all**, and it can
-  be disabled entirely for targets that mishandle them.
+- Pure Persian and pure English get **no invisible characters at all**.
+- **Decided per destination app.** Terminals and code editors display the marks as
+  literal `\u2068` escapes rather than applying them, so those are sent plain text —
+  logical order is always correct, and only *rendering* differs. Apps where a person
+  reads mixed text keep the marks and keep correct placement.
 
 ### Audio
 
@@ -89,14 +93,25 @@ Persian has no capitalisation, English has no نیم‌فاصله.
 
 ### Never loses what you said
 
-- Every recording is written to disk **before** transcription is attempted.
-- **3 automatic retries** with backoff — for failures that can plausibly succeed
-  (network drops, 429, 5xx, and 400, which providers do return for transient
-  conditions). A rejected key or unknown model fails fast instead of wasting
-  attempts.
-- Failed recordings **accumulate in a queue** rather than overwriting each other,
-  with **Retry last recording** in the menu showing how many are waiting.
-- Files are deleted only once their text has actually been delivered.
+This is the part most dictation tools get wrong: the expensive thing is the sentence
+you already said out loud, and there are many ways to lose it that have nothing to
+do with transcription.
+
+- **Every recording is written to disk before transcription is attempted**, and
+  deleted only once its text has actually been delivered.
+- **A Recordings window** lists everything still waiting, with **playback** so you
+  can hear a clip before deciding to re-send it. Multi-select, delete, reveal in
+  Finder. Failed recordings accumulate rather than overwriting one another.
+- **Every transcript is archived** to `~/.config/farsitalkwrite/transcripts/` with a
+  timestamp, rolling to a new file at 256 KB. Written whether or not the paste
+  succeeded, so nothing depends on the insertion working.
+- **The transcript stays on your clipboard.** Synthetic ⌘V cannot report failure —
+  if nothing is focused the keystroke vanishes and the app is none the wiser — so
+  ⌘V always works as a fallback.
+- **Automatic retries** for anything that can plausibly succeed on a second attempt:
+  network drops, 429, 5xx, 400, and empty responses (a provider under upstream rate
+  limiting answers 200 with no content rather than an error). A rejected key or an
+  unknown model fails immediately instead of wasting attempts.
 
 ### Providers — nothing is hardcoded
 
@@ -120,10 +135,26 @@ Three profiles ship ready to use, switchable from a menu with no restart:
 - **Optional fallback provider** — if the active one fails, retry on another
   automatically.
 
+### Speed
+
+- **Timeouts scale with the length of the recording.** A flat timeout cannot upload
+  a 2.4 MB clip on a slow link — so the longer you spoke, the more likely it was to
+  be lost. Exactly backwards.
+- **Minimal reasoning.** Transcription needs no deliberation; measured 5.5s against
+  8.1s with no loss in quality.
+- **One request per recording.** Concurrent chunk splitting was built, measured
+  against a real provider, and removed: two pieces of a 27.8s clip took 46s and 98s
+  where the whole thing takes ~12s, because concurrent requests from one key are
+  queued upstream. The code remains behind a threshold for anyone whose provider
+  behaves differently.
+
 ### Interface
 
-- **Menu bar icon** showing live state: 🎙 ready, ● recording with elapsed time,
-  ∿ transcribing, ✓ inserted.
+- **Menu bar icon** showing live state: 🎙 ready, ● recording, ∿ transcribing,
+  ✓ done. Fixed-width by design — a ticking counter changes width every second, and
+  on a full menu bar each change evicts other items.
+- **Live elapsed clock while sending**, so a slow request looks like progress rather
+  than a hang.
 - **Dock icon** with a full right-click menu — Start Dictation, Retry, Language,
   Provider, Model, Settings. macOS silently refuses to place status items on a full
   menu bar (common on notched MacBooks); the app **detects this** and keeps a Dock
@@ -203,9 +234,10 @@ An Apple Developer Program membership plus notarisation removes that step.
 dictations). Google AI Studio has a free tier — create the key in a project with
 **billing disabled**.
 
-**2. Free the 🌐 key.** System Settings → Keyboard → *Press 🌐 to:* → **Do Nothing**.
-The event tap is listen-only by design, so any other setting means the emoji picker
-opens on every trigger and steals your cursor.
+**2. The 🌐 key needs nothing.** With the default ⇧🌐 trigger, a plain press is left
+entirely to macOS — keep it on *Change Input Source* and language switching carries
+on working. Only the triple-press and hold-to-talk modes need the key set to
+*Do Nothing*, and the app tells you so if you pick one.
 
 **3. Grant three permissions:**
 
@@ -246,9 +278,14 @@ Settings with no UI, edited in the file directly:
 |---|---|
 | `retryAttempts` | Transcription attempts before giving up (default 3) |
 | `insertion.bidiIsolation` | Unicode isolation for mixed text (default true) |
+| `insertion.skipBidiForApps` | Bundle-id fragments that get plain text |
+| `insertion.alwaysCopyToClipboard` | Keep the transcript on the clipboard (default true) |
 | `insertion.mode` | `paste` or `type` (unicode keystrokes) |
+| `recording.maxSeconds` | Hard recording cap (default 30) |
+| `recording.chunkMaxSeconds` | Split threshold — above the cap, so off by default |
 | `recording.leadInDiscardMs` | Per-transport lead-in trim |
 | `providers.*.reasoningEffort` | `low`/`medium`/`high` — low is ~30% faster |
+| `trigger.holdTriggerSeconds` | Hold duration for the hold-to-start mode |
 | `fallbackProvider` | Provider to try if the active one fails |
 
 ---
@@ -283,6 +320,9 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
 | No menu bar icon | Menu bar is full — macOS gives new items no slot on notched displays. Free space in Control Center, or use the Dock icon. |
 | Text lands in the wrong app | The 🌐 key isn't set to "Do Nothing", so the emoji picker is stealing focus. |
 | Recording ends instantly | Older builds aborted on the Bluetooth HFP switch. Fixed — make sure you're running a current build. |
+| `\u2068` or `\u200F` in the text | That app renders the ordering marks literally. Add its bundle id to `insertion.skipBidiForApps`. |
+| Sending seems slow | Watch the elapsed clock in the HUD. A 429 on a shared provider pool is common; adding your own key at openrouter.ai/settings/integrations routes through your own quota. |
+| Lost a transcript | You almost certainly didn't — check `transcripts/`, the clipboard, and the Recordings window. |
 | Requests hang then time out | Some networks null-route Google's inference endpoint while its metadata endpoints still work. Use OpenRouter. |
 | Repeated Keychain prompts | Keychain items created by a differently-signed build. Re-save the key, and use `make signing-cert`. |
 | `--check` shows permissions denied | Running it from a terminal reports the *terminal's* TCC status. Trust the `PERMISSIONS` line the app logs at launch. |

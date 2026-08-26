@@ -122,6 +122,27 @@ trigger and steals the paste target.
 *logical* order; the bidi algorithm reorders it visually, flinging English words
 and sentence-final punctuation to the wrong end of the line. See `BidiText`.
 
+**But the marks are per-destination.** Terminals and code editors render them as
+literal `\u2068` escapes. Claude Code runs *inside* VS Code, so both report
+`com.microsoft.VSCode` and cannot be distinguished — the whole bundle id is skipped.
+Fixing the escapes by skipping a broad category once reintroduced the reordering bug
+everywhere; keep `skipBidiForApps` narrow and evidence-based.
+
+**Synthetic ⌘V cannot report failure.** `CGEvent` posts the keystroke and returns
+successfully whether or not anything received it. There is no way to detect a paste
+that landed nowhere, which is why the transcript is always left on the clipboard —
+and why restoring the previous clipboard afterwards (the original behaviour)
+destroyed transcripts that missed their target.
+
+**Concurrent requests to one provider key are queued upstream.** Chunk splitting was
+built on the assumption they run in parallel; measured against OpenRouter, two pieces
+of a 27.8s recording took 46s and 98s against ~12s for the whole clip. It is disabled
+by a threshold above `maxSeconds`. Do not re-enable it without measuring first.
+
+**An empty response is not necessarily silence.** A provider under upstream rate
+limiting answers 200 with empty content rather than 429, so `emptyResponse` is
+retryable.
+
 ## Providers
 
 Two `kind` values cover everything shipped:
@@ -147,7 +168,12 @@ request and then never responds (60s timeout, zero bytes), while `GET /models` a
 ~/.config/farsitalkwrite/config.json          settings (0600, no secrets)
 ~/.config/farsitalkwrite/farsitalkwrite.log   rolling log — read this first
 ~/.config/farsitalkwrite/pending/*.wav        recordings not yet transcribed
+~/.config/farsitalkwrite/transcripts/*.txt    every transcript, timestamped
 ```
+
+**Never edit `config.json` while the app is running.** It holds the settings in
+memory and writes them back, so an external edit is silently overwritten — and a
+half-written file leaves a `config.json.broken-*` backup. Quit first, edit, relaunch.
 
 API keys live in the Keychain, one generic-password item per provider (service
 `com.shahram.farsitalkwrite`, account = provider id) so switching providers never
