@@ -313,4 +313,8 @@ several non-obvious implementation choices.
 
 ## Licence
 
-MIT © 2026 Zeneax Lab by Shahram Mazar
+**GNU General Public License v3.0** — Copyright © 2026 Zeneax Lab by Shahram Mazar
+
+You are free to use, study, modify and share this software. If you distribute a
+modified version, you must release your source under the GPL as well. Closed-source
+or proprietary forks are not permitted. See [LICENSE](LICENSE).

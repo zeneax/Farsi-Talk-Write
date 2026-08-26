@@ -312,6 +312,10 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
 
 ## مجوز
 
-MIT © ۲۰۲۶ Zeneax Lab by Shahram Mazar
+**GNU General Public License v3.0** — حق نشر © ۲۰۲۶ Zeneax Lab by Shahram Mazar
+
+شما آزادید این نرم‌افزار را استفاده، مطالعه، تغییر و بازتوزیع کنید. اگر نسخهٔ
+تغییریافته‌ای منتشر کنید، باید کد منبع آن را هم تحت همین مجوز GPL منتشر کنید.
+انتشار نسخه‌های بسته و انحصاری مجاز نیست. [LICENSE](LICENSE) را ببینید.
 
 </div>

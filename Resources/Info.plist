@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>
-	<string>FarsiTalkWrite</string>
 	<key>CFBundleDisplayName</key>
 	<string>FarsiTalkWrite</string>
 	<key>CFBundleExecutable</key>
@@ -14,6 +12,8 @@
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.shahram.farsitalkwrite</string>
+	<key>CFBundleName</key>
+	<string>FarsiTalkWrite</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -22,16 +22,11 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
-
-	<!-- Menu bar agent: no Dock icon, no main window. -->
 	<key>LSUIElement</key>
 	<true/>
-
-	<!-- Without this key the app is denied the microphone outright. -->
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Zeneax Lab by Shahram Mazar. Licensed under GNU GPL v3.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>FarsiTalkWrite records your voice only while you are dictating, and sends that audio to the transcription provider you configured so it can be written back as Farsi text at your cursor.</string>
-
-	<key>NSHumanReadableCopyright</key>
-	<string>FarsiTalkWrite</string>
 </dict>
 </plist>
