@@ -156,7 +156,6 @@ enum ProviderRegistry {
 
             var collected: [(Int, TranscriptionResult)] = []
             while let done = try await group.next() {
-                FTWLog.info("Chunk \(done.0 + 1) collected")
                 collected.append(done)
                 completed += 1
                 onProgress?(completed, chunks.count)

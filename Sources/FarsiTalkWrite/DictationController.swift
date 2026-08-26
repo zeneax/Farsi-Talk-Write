@@ -117,9 +117,8 @@ final class DictationController {
     // MARK: - Public control
 
     func start() {
-        FTWLog.info("DICTATION start() requested — state=\(state)")
         guard !state.isBusy else {
-            FTWLog.info("DICTATION start() ignored, already busy")
+            FTWLog.info("Ignoring trigger — already \(state.isRecording ? "recording" : "transcribing").")
             return
         }
 
@@ -138,13 +137,11 @@ final class DictationController {
     }
 
     func stop() {
-        FTWLog.info("DICTATION stop() requested — state=\(state)\n\(Thread.callStackSymbols.prefix(6).joined(separator: "\n"))")
         guard state.isRecording else { return }
         recorder.stop(reason: .manual)
     }
 
     func toggle() {
-        FTWLog.info("DICTATION toggle() — state=\(state)")
         if state.isRecording { stop() } else { start() }
     }
 
