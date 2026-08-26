@@ -4,11 +4,11 @@ Guidance for working in this repository.
 
 ## What this is
 
-A macOS menu bar agent for Farsi (and English) push-to-talk dictation. Triple-press
-🌐 or click the Dock/menu bar icon, speak, and the transcript is pasted at the
-cursor in whatever app is frontmost.
+A macOS menu bar agent for Farsi (and English) push-to-talk dictation. Press ⇧🌐 or
+click the Dock/menu bar icon, speak, and the transcript is pasted at the cursor in
+whatever app is frontmost.
 
-Swift + AppKit, ~6,300 lines, **no external dependencies**.
+Swift + AppKit, ~7,500 lines, **no external dependencies**, strict concurrency clean.
 
 ## Build
 
@@ -74,9 +74,11 @@ trigger ─→ DictationController ─→ AudioRecorder ─→ ProviderRegistry 
 | `AudioDeviceManager` | CoreAudio enumeration, transport detection, AirPods "prefer when available". |
 | `Providers/` | `TranscriptionProvider` protocol + two wire formats. Adding a provider is normally config, not code. |
 | `BidiText` | Unicode isolation for mixed Farsi/Latin text. |
-| `TextInserter` | Clipboard + synthetic ⌘V, with `changeCount`-guarded restore. |
+| `TextInserter` | Clipboard + synthetic ⌘V; leaves the transcript on the clipboard. |
+| `TranscriptArchive` | Appends every transcript to a rolling timestamped file. |
+| `AudioChunker` | Silence-boundary splitting. Present but disabled — see gotchas. |
 | `HotkeyMonitor` | Listen-only `CGEventTap` on one modifier key. |
-| `UI/` | Status item, Dock menu, Setup Guide, Settings, HUD, Quick Help. |
+| `UI/` | Status item, Dock menu, Setup Guide, Settings, HUD, Quick Help, Recordings. |
 
 State lives in `Config`, held by `AppDelegate` and pushed to every component via
 `persist()`. Components never write config directly — they call `onConfigChanged`.
@@ -114,9 +116,14 @@ MacBooks macOS silently gives it no position (`buttonFrame` origin ≈ `{0, -32.
 `StatusItemController.checkPlacement()` detects this and the app keeps a Dock icon
 so it stays reachable.
 
-**The 🌐 key must be set to "Do Nothing"** (`AppleFnUsageType = 0`). The event tap is
-listen-only by design, so any other setting means the emoji picker opens on every
-trigger and steals the paste target.
+**The 🌐 key only needs freeing for *bare-press* triggers.** The event tap is
+listen-only, so with `.triplePress` or `.holdToTalk` every press also fires the
+system action, which steals the paste target — those need `AppleFnUsageType = 0`.
+`.shiftCombo` (the default) and `.holdDuration` deliberately leave a plain press to
+macOS so the key keeps switching input source; `Permissions.Status.needsGlobeKeyFree`
+encodes this, and also checks the key code so retargeting to Right ⌘ drops the
+requirement entirely. Setting it to "Do Nothing" unconditionally silently cost the
+user their language switching.
 
 **Mixed Farsi/Latin text needs Unicode isolation.** The model returns the correct
 *logical* order; the bidi algorithm reorders it visually, flinging English words
