@@ -40,7 +40,7 @@ enum TextInserter {
 
     private static let virtualKeyV: CGKeyCode = 9
 
-    static func insert(_ text: String, mode: InsertionMode, bidiIsolation: Bool = true) throws {
+    static func insert(_ text: String, mode: InsertionMode, bidiIsolation: Bool = true, keepOnClipboard: Bool = true) throws {
         guard !text.isEmpty else { return }
         guard Permissions.accessibility.isGranted else { throw InsertError.accessibilityDenied }
 
@@ -50,8 +50,14 @@ enum TextInserter {
         let prepared = bidiIsolation ? BidiText.directionallyMarked(cleaned) : cleaned
 
         switch mode {
-        case .paste: try paste(prepared)
-        case .type:  try typeUnicode(prepared)
+        case .paste: try paste(prepared, keepOnClipboard: keepOnClipboard)
+        case .type:
+            // Typed directly, so nothing lands on the clipboard unless asked.
+            if keepOnClipboard {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prepared, forType: .string)
+            }
+            try typeUnicode(prepared)
         }
     }
 
@@ -60,9 +66,9 @@ enum TextInserter {
     /// Clipboard round-trip is the reliable path for RTL Farsi: synthetic ⌘V is
     /// handled correctly by essentially every app, where synthesised key events
     /// for non-Latin text are not.
-    private static func paste(_ text: String) throws {
+    private static func paste(_ text: String, keepOnClipboard: Bool) throws {
         let pasteboard = NSPasteboard.general
-        let saved = snapshot(pasteboard)
+        let saved = keepOnClipboard ? [] : snapshot(pasteboard)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -70,8 +76,11 @@ enum TextInserter {
 
         try postCommandV()
 
-        // Restore the user's clipboard, but only if nothing else has written to it
-        // in the meantime — otherwise we would clobber something they just copied.
+        // When keeping it, we stop here: the transcript stays on the clipboard so
+        // ⌘V works even if the paste above reached nothing. Restoring here is what
+        // previously destroyed transcripts that missed their target.
+        guard !keepOnClipboard else { return }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             guard pasteboard.changeCount == ourChangeCount else {
                 FTWLog.info("Clipboard changed during paste; leaving the new contents alone.")

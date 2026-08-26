@@ -56,8 +56,10 @@ struct GeminiInteractionsProvider: TranscriptionProvider {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        // Scaled to the payload: a long recording is a large upload, and a flat
+        // timeout silently discards exactly the recordings worth keeping.
         let json = try await ProviderHTTP.send(
-            request, timeout: profile.timeoutSeconds, model: profile.model
+            request, timeout: profile.timeout(forAudioBytes: wav.count), model: profile.model
         )
 
         let text = Self.extractText(from: json)

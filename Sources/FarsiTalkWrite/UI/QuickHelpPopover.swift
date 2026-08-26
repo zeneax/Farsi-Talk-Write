@@ -22,6 +22,7 @@ import AppKit
 
 /// One screen, no scrolling — the reminder you want on day 30. The Setup Guide is
 /// the version you want on day 1.
+@MainActor
 final class QuickHelpPopover {
 
     var onOpenSetupGuide: (() -> Void)?

@@ -139,7 +139,7 @@ enum CLI {
         }
 
         Term.heading("Permissions")
-        let status = Permissions.status(triggerMode: config.trigger.mode)
+        let status = Permissions.status(triggerMode: config.trigger.mode, triggerKeyCode: config.trigger.triggerKeyCode)
         Term.row("Microphone", status.microphone.label, ok: status.microphone.isGranted)
         Term.row("Accessibility", status.accessibility.label, ok: status.accessibility.isGranted)
 

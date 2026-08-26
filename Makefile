@@ -32,7 +32,14 @@ TARGET      := arm64-apple-macos14.0
 SIGN_ID     ?= $(shell security find-certificate -c "FarsiTalkWrite Dev" >/dev/null 2>&1 \
                  && echo "FarsiTalkWrite Dev" || echo "-")
 
-SWIFTC_FLAGS := -O -target $(TARGET) -sdk $(SDK) \
+# -strict-concurrency=targeted is not optional here.
+#
+# This project shipped a crash — "Must only be used from the main thread" — caused
+# by a background task-group callback mutating state that drives AppKit. Strict
+# checking reports that as a build error, so the class of bug that cost the most
+# debugging time cannot reach a build again. The codebase is clean under it; keep
+# it that way.
+SWIFTC_FLAGS := -O -target $(TARGET) -sdk $(SDK) -strict-concurrency=targeted \
                 -framework AppKit -framework AVFoundation \
                 -framework CoreAudio -framework AudioToolbox \
                 -framework CoreGraphics -framework Carbon \

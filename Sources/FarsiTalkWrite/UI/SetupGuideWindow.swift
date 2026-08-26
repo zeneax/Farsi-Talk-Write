@@ -26,6 +26,7 @@ import AppKit
 /// Every step verifies itself live rather than just telling you what to do, so the
 /// checklist always reflects reality — which also makes it the troubleshooting tool
 /// when something breaks months later.
+@MainActor
 final class SetupGuideWindow: NSObject, NSWindowDelegate {
 
     var config: Config { didSet { refresh() } }
@@ -91,7 +92,9 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
         // the user having to come back and press anything.
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            self?.refresh()
+            MainActor.assumeIsolated {
+                self?.refresh()
+            }
         }
     }
 
@@ -117,11 +120,20 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
                 format: "● Recording %.0fs — input level %.0f dBFS", elapsed, Double(level)
             )
             dictationStatusLabel.textColor = .systemRed
-        case .transcribing:
-            dictationStatusLabel.stringValue = "در حال رونویسی…  (sending audio to \(config.activeProfile?.model ?? "the model"))"
+        case .transcribingChunks(let done, let total):
+            dictationStatusLabel.stringValue = "Long recording split into \(total) parts — \(done) done…"
+            dictationStatusLabel.textColor = .systemOrange
+        case .transcribing(let attempt, let total, let elapsed):
+            _ = elapsed
+            dictationStatusLabel.stringValue = attempt == 1
+                ? "Sending audio to \(config.activeProfile?.model ?? "the model")…"
+                : "Send failed — retrying (attempt \(attempt) of \(total))…"
             dictationStatusLabel.textColor = .systemOrange
         case .inserted:
             dictationStatusLabel.stringValue = "✓ Done"
+            dictationStatusLabel.textColor = .systemGreen
+        case .copiedToClipboard:
+            dictationStatusLabel.stringValue = "✓ Copied to clipboard (nothing was focused to type into)"
             dictationStatusLabel.textColor = .systemGreen
         case .failed(let why):
             dictationStatusLabel.stringValue = "✗ \(why)"
@@ -232,7 +244,12 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
 
         for step in Step.allCases {
             // Input Monitoring and the 🌐 key are irrelevant in menu-bar-only mode.
-            if step == .globeKey, config.trigger.mode == .menuBarOnly { continue }
+            // Skipped for any trigger that leaves a bare press to macOS.
+            if step == .globeKey,
+               !Permissions.status(triggerMode: config.trigger.mode,
+                                   triggerKeyCode: config.trigger.triggerKeyCode).needsGlobeKeyFree {
+                continue
+            }
 
             let mark: String
             if step.rawValue == stepIndex {
@@ -292,9 +309,11 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
         case .apiKey, .pasteKey:
             return Keychain.hasKey(forProvider: config.activeProvider)
         case .globeKey:
-            return config.trigger.mode == .menuBarOnly || Permissions.fnKeyIsFree
+            return !Permissions.status(triggerMode: config.trigger.mode,
+                                       triggerKeyCode: config.trigger.triggerKeyCode).needsGlobeKeyFree
+                || Permissions.fnKeyIsFree
         case .permissions:
-            return Permissions.status(triggerMode: config.trigger.mode).isReady
+            return Permissions.status(triggerMode: config.trigger.mode, triggerKeyCode: config.trigger.triggerKeyCode).isReady
         case .microphone:
             return AudioDeviceManager.resolveInputDevice(config.recording.inputDevice) != nil
         case .tryIt:
@@ -471,7 +490,7 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
     }
 
     private func buildPermissionsStep(into stack: NSStackView) {
-        let state = Permissions.status(triggerMode: config.trigger.mode)
+        let state = Permissions.status(triggerMode: config.trigger.mode, triggerKeyCode: config.trigger.triggerKeyCode)
 
         stack.addArrangedSubview(body("These are the only permissions FarsiTalkWrite needs. Each says why."))
 

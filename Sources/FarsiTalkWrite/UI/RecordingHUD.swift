@@ -26,6 +26,7 @@ import AppKit
 /// The critical property is that it never takes keyboard focus: `.nonactivatingPanel`
 /// plus `orderFrontRegardless()`. If this window ever became key, the text field
 /// being dictated into would lose its caret and the paste would land elsewhere.
+@MainActor
 final class RecordingHUD {
 
     private var panel: NSPanel?
@@ -37,7 +38,20 @@ final class RecordingHUD {
 
     // MARK: - Presentation
 
+    /// Where on screen the readout appears. Bottom-centre overlaps the text field
+    /// in most apps — precisely where the user is looking — so this is configurable
+    /// and defaults elsewhere.
+    var position: HUDPosition = .topRight
+    var errorDisplaySeconds: Double = 12
+
     func show(maxSeconds: TimeInterval) {
+        // Belt and braces: this orders a window on screen, which AppKit permits
+        // only from the main thread. The caller is expected to be on it, but a
+        // trap here takes the whole app down, so it is not left to chance.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.show(maxSeconds: maxSeconds) }
+            return
+        }
         contentView.maxSeconds = maxSeconds
         ensurePanel()
         fadeTimer?.invalidate()
@@ -49,15 +63,22 @@ final class RecordingHUD {
     }
 
     func update(state: DictationController.State) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.update(state: state) }
+            return
+        }
         contentView.apply(state)
         switch state {
         case .idle:
             hide(after: 0)
         case .inserted:
-            hide(after: 0.9)
+            hide(after: 1.5)
+        case .copiedToClipboard:
+            // Needs longer: this one asks the user to go and paste it themselves.
+            hide(after: 8.0)
         case .failed:
-            hide(after: 4.0)
-        case .recording, .transcribing:
+            hide(after: errorDisplaySeconds)
+        case .recording, .transcribing, .transcribingChunks:
             break
         }
     }
@@ -66,7 +87,9 @@ final class RecordingHUD {
         fadeTimer?.invalidate()
         guard delay > 0 else { return fadeOut() }
         fadeTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            self?.fadeOut()
+            MainActor.assumeIsolated {
+                self?.fadeOut()
+            }
         }
     }
 
@@ -113,10 +136,15 @@ final class RecordingHUD {
             ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
 
-        let origin = NSPoint(
-            x: frame.midX - width / 2,
-            y: frame.minY + 120
-        )
+        let margin: CGFloat = 24
+        let origin: NSPoint
+        switch position {
+        case .topRight:     origin = NSPoint(x: frame.maxX - width - margin, y: frame.maxY - height - margin)
+        case .topLeft:      origin = NSPoint(x: frame.minX + margin,         y: frame.maxY - height - margin)
+        case .bottomRight:  origin = NSPoint(x: frame.maxX - width - margin, y: frame.minY + margin)
+        case .bottomLeft:   origin = NSPoint(x: frame.minX + margin,         y: frame.minY + margin)
+        case .bottomCenter: origin = NSPoint(x: frame.midX - width / 2,      y: frame.minY + 120)
+        }
         panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: false)
     }
 }
@@ -148,13 +176,24 @@ private final class HUDContentView: NSView {
             elapsed = seconds
             level = db
             startPulse()
-        case .transcribing:
+        case .transcribingChunks(let done, let total):
             stage = .transcribing
-            message = "در حال رونویسی…"
+            message = "Sending \(total) parts · \(done)/\(total) done"
+            startPulse()
+        case .transcribing(let attempt, let total, let elapsed):
+            stage = .transcribing
+            let clock = String(format: "%.0fs", elapsed)
+            message = attempt == 1
+                ? "Sending…  \(clock)   در حال ارسال"
+                : "Retrying \(attempt)/\(total)…  \(clock)"
             startPulse()
         case .inserted:
             stage = .done
             message = "✓"
+            stopPulse()
+        case .copiedToClipboard:
+            stage = .done
+            message = "✓ Done — also on clipboard, ⌘V to paste again\nمتن در کلیپ‌بورد ذخیره شد"
             stopPulse()
         case .failed(let why):
             stage = .failed
@@ -167,9 +206,11 @@ private final class HUDContentView: NSView {
     private func startPulse() {
         guard pulseTimer == nil else { return }
         pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.pulse += 0.05
-            self.needsDisplay = true
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pulse += 0.05
+                self.needsDisplay = true
+            }
         }
         if let pulseTimer { RunLoop.main.add(pulseTimer, forMode: .common) }
     }

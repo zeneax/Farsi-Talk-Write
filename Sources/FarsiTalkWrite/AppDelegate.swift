@@ -20,6 +20,7 @@
 
 import AppKit
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var config = ConfigStore.load()
@@ -31,9 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var settingsWindow: SettingsWindow?
     private var setupGuide: SetupGuideWindow?
+    private var recordingsWindow: RecordingsWindow?
 
     private var settingsOpen = false { didSet { updateActivationPolicy() } }
     private var guideOpen = false { didSet { updateActivationPolicy() } }
+    private var recordingsOpen = false { didSet { updateActivationPolicy() } }
 
     /// A menu bar agent normally has no Dock icon, which means a window that slips
     /// behind another app cannot be brought back — there is nothing to click. Show
@@ -43,14 +46,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Also keep the Dock icon while setup is unfinished. Until the app can
         // actually dictate, the user needs a guaranteed way back to the guide, and
         // the menu bar icon alone has proven too easy to lose.
-        let wantsDockIcon = settingsOpen || guideOpen || !isReadyToDictate
+        let wantsDockIcon = settingsOpen || guideOpen || recordingsOpen || !isReadyToDictate
             || config.ui.alwaysShowDockIcon
             || statusItemIsUnreachable
         let policy: NSApplication.ActivationPolicy = wantsDockIcon ? .regular : .accessory
         guard NSApp.activationPolicy() != policy else { return }
 
         NSApp.setActivationPolicy(policy)
-        if wantsDockIcon {
+        // Only take the foreground when a window of ours actually needs it.
+        // Activating merely to gain a Dock icon steals focus and puts our menus in
+        // the menu bar, pushing other items out on a crowded one.
+        if wantsDockIcon, settingsOpen || guideOpen || recordingsOpen {
             NSApp.activate(ignoringOtherApps: true)
         }
     }
@@ -82,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the CLI from a terminal reports the *terminal's* TCC status, because
         // macOS attributes Accessibility to the responsible process — so this is
         // the only trustworthy reading.
-        let status = Permissions.status(triggerMode: config.trigger.mode)
+        let status = Permissions.status(triggerMode: config.trigger.mode, triggerKeyCode: config.trigger.triggerKeyCode)
         FTWLog.info("PERMISSIONS mic=\(status.microphone.label) accessibility=\(status.accessibility.label) inputMonitoring=\(status.inputMonitoring.label) ready=\(status.isReady)")
     }
 
@@ -102,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Everything that must be true before a dictation can succeed.
     private var isReadyToDictate: Bool {
         Keychain.hasKey(forProvider: config.activeProvider)
-            && Permissions.status(triggerMode: config.trigger.mode).isReady
+            && Permissions.status(triggerMode: config.trigger.mode, triggerKeyCode: config.trigger.triggerKeyCode).isReady
     }
 
     /// Clicking the Dock icon (or the app in Finder) while it is already running
@@ -117,10 +123,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // thing. Settings lives on the Dock icon's right-click menu and ⌘,.
         if isReadyToDictate {
             controller.toggle(destination: .cursor)
+            // Immediately give focus back to whatever the user was typing in.
+            //
+            // Two reasons. The paste has to land in *their* text field, not ours.
+            // And while this app is frontmost its menus occupy the left of the menu
+            // bar, which on a full bar evicts other items — the input-source
+            // (keyboard language) indicator being the visible casualty.
+            returnFocusToPreviousApp()
         } else {
             openSetupGuide()
         }
         return true
+    }
+
+    /// Steps out of the foreground without closing anything, unless one of our own
+    /// windows is genuinely open and being used.
+    private func returnFocusToPreviousApp() {
+        guard !settingsOpen, !guideOpen, !recordingsOpen else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NSApp.hide(nil)
+        }
     }
 
     /// Right-click menu on the Dock icon. This is what makes the Dock a complete
@@ -144,6 +166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retry.target = self
             menu.addItem(retry)
         }
+
+        let recordings = NSMenuItem(
+            title: controller.pendingCount > 0
+                ? "Recordings… (\(controller.pendingCount) waiting)" : "Recordings…",
+            action: #selector(menuRecordings), keyEquivalent: ""
+        )
+        recordings.target = self
+        menu.addItem(recordings)
 
         menu.addItem(.separator())
 
@@ -210,8 +240,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    @objc private func dockToggleRecording() { controller.toggle(destination: .cursor) }
+    @objc private func dockToggleRecording() {
+        controller.toggle(destination: .cursor)
+        returnFocusToPreviousApp()
+    }
     @objc private func dockRetry() { controller.retryLastRecording() }
+    @objc private func menuRecordings() { openRecordings() }
+
+    private func openRecordings() {
+        if recordingsWindow == nil {
+            let w = RecordingsWindow()
+            w.onTranscribe = { [weak self] url in self?.controller.transcribeSaved(url) }
+            w.onClosed = { [weak self] in self?.recordingsOpen = false }
+            recordingsWindow = w
+        }
+        recordingsOpen = true
+        recordingsWindow?.present()
+    }
 
     @objc private func dockPickProvider(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
@@ -241,11 +286,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.statusItem.pendingRetryCount = self.controller.pendingCount
             self.statusItem.update(state: state)
             self.setupGuide?.updateDictationState(state)
+            if case .idle = state { self.recordingsWindow?.reload() }
 
             guard self.config.hud.enabled else { return }
-            if case .recording(let elapsed, _) = state, elapsed < 0.3 {
+            // Show it whenever work begins — not only on a fresh recording.
+            // Re-sending from the Recordings window has no recording phase, so
+            // keying solely off `.recording` left that path with no feedback at all.
+            switch state {
+            case .recording(let elapsed, _) where elapsed < 0.3:
                 self.hud.show(maxSeconds: self.config.recording.maxSeconds)
+            case .transcribing, .transcribingChunks:
+                self.hud.show(maxSeconds: self.config.recording.maxSeconds)
+            default:
+                break
             }
+            self.hud.position = self.config.hud.position
+            self.hud.errorDisplaySeconds = self.config.hud.errorDisplaySeconds
             self.hud.update(state: state)
         }
 
@@ -306,6 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updateActivationPolicy()
         }
         statusItem.onRetryLast = { [weak self] in self?.controller.retryLastRecording() }
+        statusItem.onOpenRecordings = { [weak self] in self?.openRecordings() }
         statusItem.onOpenSettings = { [weak self] in self?.openSettings() }
         statusItem.onOpenSetupGuide = { [weak self] in self?.openSetupGuide() }
         statusItem.onOpenQuickHelp = { [weak self] button in
@@ -349,6 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(menuSettings), keyEquivalent: ",")
+            .target = self
+        appMenu.addItem(withTitle: "Recordings…", action: #selector(menuRecordings), keyEquivalent: "r")
             .target = self
         appMenu.addItem(withTitle: "Setup Guide…", action: #selector(menuSetupGuide), keyEquivalent: "")
             .target = self

@@ -47,6 +47,8 @@ final class HotkeyMonitor {
     private var pressTimestamps: [TimeInterval] = []
     private var holdStartedAt: TimeInterval?
     private var keyIsDown = false
+    /// Fires if the key is still held when it expires; cancelled on early release.
+    private var holdTimer: Timer?
 
     // MARK: - Lifecycle
 
@@ -110,6 +112,8 @@ final class HotkeyMonitor {
     }
 
     func stop() {
+        holdTimer?.invalidate()
+        holdTimer = nil
         if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
@@ -147,6 +151,10 @@ final class HotkeyMonitor {
         guard isDown != keyIsDown else { return } // ignore duplicate reports
         keyIsDown = isDown
 
+        // Captured here, on the event itself, rather than polling global modifier
+        // state later — by the time the async block runs, Shift may be released.
+        let shiftHeld = event.flags.contains(.maskShift)
+
         let now = event.timestamp > 0
             ? Double(event.timestamp) / 1_000_000_000.0
             : ProcessInfo.processInfo.systemUptime
@@ -156,9 +164,11 @@ final class HotkeyMonitor {
             self.onRawKeyEvent?(isDown)
 
             switch self.config.mode {
-            case .triplePress: self.handleTriplePress(isDown: isDown, at: now)
-            case .holdToTalk:  self.handleHold(isDown: isDown, at: now)
-            case .menuBarOnly: break
+            case .triplePress:  self.handleTriplePress(isDown: isDown, at: now)
+            case .holdToTalk:   self.handleHold(isDown: isDown, at: now)
+            case .holdDuration: self.handleHoldDuration(isDown: isDown)
+            case .shiftCombo:   self.handleShiftCombo(isDown: isDown, shiftHeld: shiftHeld)
+            case .menuBarOnly:  break
             }
         }
     }
@@ -174,6 +184,31 @@ final class HotkeyMonitor {
             pressTimestamps.removeAll()
             onTriggerStart?()
         }
+    }
+
+    /// Fires on key-down only while Shift is held. A plain press is ignored
+    /// entirely, so the key's system function is untouched.
+    private func handleShiftCombo(isDown: Bool, shiftHeld: Bool) {
+        guard isDown, shiftHeld else { return }
+        onTriggerStart?()
+    }
+
+    /// Starts only when the key has been held long enough to be deliberate.
+    /// A short press is never consumed, so the key keeps its system behaviour.
+    private func handleHoldDuration(isDown: Bool) {
+        holdTimer?.invalidate()
+        holdTimer = nil
+
+        guard isDown else { return }
+
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: config.holdTriggerSeconds, repeats: false
+        ) { [weak self] _ in
+            guard let self, self.keyIsDown else { return }
+            self.onTriggerStart?()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        holdTimer = timer
     }
 
     private func handleHold(isDown: Bool, at now: TimeInterval) {

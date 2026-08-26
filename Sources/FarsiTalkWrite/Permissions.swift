@@ -179,26 +179,44 @@ enum Permissions {
         var inputMonitoring: PermissionState
         var fnUsage: FnUsage?
         var triggerMode: TriggerMode
+        var triggerKeyCode: Int = 63
 
-        /// Input Monitoring and the 🌐 setting are irrelevant in menu-bar-only mode.
+        /// Input Monitoring is irrelevant in menu-bar-only mode.
         var needsInputMonitoring: Bool { triggerMode != .menuBarOnly }
+
+        /// Whether the 🌐 key must be set to "Do Nothing".
+        ///
+        /// Only for gestures built out of *bare* presses of that key. A short press
+        /// then reaches both macOS and this app, so the system action fires on every
+        /// trigger and steals focus. `shiftCombo` and `holdDuration` are deliberately
+        /// designed around that: a plain press is left entirely to macOS, so the key
+        /// can keep switching input source — which is the whole point of them.
+        var needsGlobeKeyFree: Bool {
+            guard triggerKeyCode == 63 else { return false }   // not the 🌐 key at all
+            switch triggerMode {
+            case .triplePress, .holdToTalk: return true
+            case .holdDuration, .shiftCombo, .menuBarOnly: return false
+            }
+        }
 
         var isReady: Bool {
             guard microphone.isGranted, accessibility.isGranted else { return false }
             if needsInputMonitoring {
-                guard inputMonitoring.isGranted, fnUsage == .doNothing else { return false }
+                guard inputMonitoring.isGranted else { return false }
+                if needsGlobeKeyFree, fnUsage != .doNothing { return false }
             }
             return true
         }
     }
 
-    static func status(triggerMode: TriggerMode) -> Status {
+    static func status(triggerMode: TriggerMode, triggerKeyCode: Int = 63) -> Status {
         Status(
             microphone: microphone,
             accessibility: accessibility,
             inputMonitoring: inputMonitoring,
             fnUsage: fnKeyUsage,
-            triggerMode: triggerMode
+            triggerMode: triggerMode,
+            triggerKeyCode: triggerKeyCode
         )
     }
 }

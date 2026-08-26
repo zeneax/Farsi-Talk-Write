@@ -48,7 +48,11 @@ enum ProviderRegistry {
     /// Transcribes with the active provider, falling back once to
     /// `fallbackProvider` if one is configured. A Google outage or a free-tier
     /// rate limit then becomes invisible rather than a failed dictation.
-    static func transcribe(wav: Data, config: Config) async throws -> TranscriptionResult {
+    static func transcribe(
+        wav: Data,
+        config: Config,
+        onAttempt: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> TranscriptionResult {
         let provider = try makeActive(config: config)
 
         // Transient network failures are common on VPNs and flaky links, and the
@@ -58,6 +62,7 @@ enum ProviderRegistry {
         var lastError: Error?
 
         for attempt in 1...attempts {
+            onAttempt?(attempt, attempts)
             do {
                 let result = try await provider.transcribe(wav: wav, prompt: config.activePrompt)
                 if attempt > 1 {
@@ -67,7 +72,11 @@ enum ProviderRegistry {
             } catch let error as ProviderError {
                 guard error.isTransient else { throw error }
                 lastError = error
-                FTWLog.warn("Transcription attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
+                if case .emptyResponse = error {
+                    FTWLog.warn("Attempt \(attempt)/\(attempts): provider returned no text — retrying in case it is rate-limited.")
+                } else {
+                    FTWLog.warn("Transcription attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
+                }
             } catch {
                 lastError = error
                 FTWLog.warn("Transcription attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
@@ -90,6 +99,92 @@ enum ProviderRegistry {
         }
 
         throw lastError ?? ProviderError.emptyResponse
+    }
+
+    /// Transcribes a recording, splitting it at silence when it is long enough that
+    /// a single upload would be slow or timeout-prone.
+    ///
+    /// Pieces are sent **concurrently** and reassembled in order: a 60-second
+    /// recording then costs roughly the time of its slowest piece rather than the
+    /// sum of all of them. Order is preserved by index, not by completion.
+    static func transcribeChunked(
+        wav: Data,
+        config: Config,
+        onProgress: ((Int, Int) -> Void)? = nil,
+        onAttempt: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> TranscriptionResult {
+
+        let chunks = AudioChunker.split(
+            wav: wav,
+            targetSeconds: config.recording.chunkTargetSeconds,
+            maxSeconds: config.recording.chunkMaxSeconds,
+            silenceThresholdDb: config.recording.silenceThreshold(forDeviceUID: nil)
+        )
+
+        // Short recording: one request, full context, best possible accuracy.
+        guard chunks.count > 1 else {
+            return try await transcribe(wav: wav, config: config, onAttempt: onAttempt)
+        }
+
+        FTWLog.info("Split \(String(format: "%.1f", Double(wav.count - 44) / 32000))s recording into \(chunks.count) pieces at silence boundaries")
+        onProgress?(0, chunks.count)
+
+        var completed = 0
+        let results = try await withThrowingTaskGroup(of: (Int, TranscriptionResult).self) { group -> [(Int, TranscriptionResult)] in
+            // Bounded concurrency: enough to be fast, not enough to trip rate limits.
+            let limit = 3
+            var next = 0
+
+            func addTask(_ i: Int) {
+                group.addTask {
+                    do {
+                        FTWLog.info("Chunk \(i + 1)/\(chunks.count) sending (\(chunks[i].wav.count / 1024) KB)…")
+                        let r = try await transcribe(wav: chunks[i].wav, config: config)
+                        FTWLog.info("Chunk \(i + 1)/\(chunks.count) returned \(r.text.count) characters")
+                        return (i, r)
+                    } catch ProviderError.emptyResponse {
+                        // A chunk that lands on a pause legitimately has nothing in
+                        // it. Treating that as a failure would abort the sibling
+                        // chunks too and lose a recording that mostly *did* contain
+                        // speech — so an empty piece contributes an empty string.
+                        FTWLog.info("Chunk \(i + 1)/\(chunks.count) contained no speech; continuing.")
+                        return (i, TranscriptionResult(text: "", model: "", inputTokens: nil, outputTokens: nil))
+                    }
+                }
+            }
+            while next < min(limit, chunks.count) { addTask(next); next += 1 }
+
+            var collected: [(Int, TranscriptionResult)] = []
+            while let done = try await group.next() {
+                FTWLog.info("Chunk \(done.0 + 1) collected")
+                collected.append(done)
+                completed += 1
+                onProgress?(completed, chunks.count)
+                if next < chunks.count { addTask(next); next += 1 }
+            }
+            return collected
+        }
+
+        let ordered = results.sorted { $0.0 < $1.0 }.map(\.1)
+        let text = ordered
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        // Only genuinely empty when *every* piece was empty.
+        guard !text.isEmpty else { throw ProviderError.emptyResponse }
+
+        let spoken = ordered.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+        if spoken < ordered.count {
+            FTWLog.info("\(spoken)/\(ordered.count) chunks contained speech; joined what was there.")
+        }
+
+        return TranscriptionResult(
+            text: text,
+            model: ordered.first?.model ?? "",
+            inputTokens: ordered.compactMap(\.inputTokens).reduce(0, +),
+            outputTokens: ordered.compactMap(\.outputTokens).reduce(0, +)
+        )
     }
 
     // MARK: - Cost estimation

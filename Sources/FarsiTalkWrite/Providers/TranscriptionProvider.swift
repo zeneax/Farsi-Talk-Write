@@ -38,7 +38,7 @@ struct TranscriptionResult {
     }
 }
 
-protocol TranscriptionProvider {
+protocol TranscriptionProvider: Sendable {
     var profileID: String { get }
     var profile: ProviderProfile { get }
 
@@ -68,7 +68,16 @@ enum ProviderError: LocalizedError {
             return Self.explain(status: status, body: body, model: model)
 
         case .emptyResponse:
-            return "The model returned no text. If you did not speak, this is expected."
+            return """
+            No speech was found in this recording.
+
+            The audio was sent and understood — it simply contained nothing to \
+            transcribe. Usually that means the microphone was too quiet, the wrong \
+            input device was selected, or the trigger fired by accident.
+
+            The recording is kept, so you can play it back in Recordings to hear \
+            what was captured.
+            """
 
         case .malformedResponse(let detail):
             return "Could not read the response: \(detail)"
@@ -102,7 +111,17 @@ enum ProviderError: LocalizedError {
             }
         case .malformedResponse:
             return true
-        case .missingAPIKey, .badURL, .emptyResponse:
+        case .emptyResponse:
+            // Retryable, despite sounding final.
+            //
+            // A provider under upstream rate limiting can answer 200 with empty
+            // content rather than a 429 — observed here: a clip that transcribes
+            // perfectly on its own came back empty seconds after a documented 429.
+            // Treating empty as permanent discarded a good recording. A genuinely
+            // silent clip costs three cheap calls to confirm, which is the better
+            // trade.
+            return true
+        case .missingAPIKey, .badURL:
             return false
         }
     }

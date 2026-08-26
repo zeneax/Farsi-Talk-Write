@@ -27,8 +27,14 @@ if CLI.run(CommandLine.arguments) {
 }
 
 // Menu bar agent: no Dock icon, no main window.
+//
+// Top-level code is nonisolated, but AppDelegate is @MainActor — and this really
+// does run on the main thread, so the isolation is asserted rather than hopped.
+// A Task here would return before `app.run()` and leave the app without a delegate.
 let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
+MainActor.assumeIsolated {
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+}
 app.run()

@@ -42,8 +42,18 @@ struct ProviderProfile: Codable {
     var baseURL: String
     var model: String
     var extraHeaders: [String: String] = [:]
-    var timeoutSeconds: Double = 45
+    /// Base request timeout. The effective timeout scales with the length of the
+    /// audio being uploaded — a 60-second clip is a 2.4 MB upload, which a flat
+    /// 45 seconds could not complete on a slow link, losing the recording.
+    var timeoutSeconds: Double = 60
     var note: String?
+
+    /// Effective timeout for a given payload: base, plus headroom proportional to
+    /// how much audio has to be uploaded and processed.
+    func timeout(forAudioBytes bytes: Int) -> Double {
+        let seconds = Double(max(0, bytes - 44)) / (16_000 * 2)
+        return timeoutSeconds + seconds * 3
+    }
     var modelPresets: [String] = []
 
     /// How much the model is allowed to "think" before answering, for providers
@@ -57,6 +67,20 @@ struct ProviderProfile: Codable {
 enum TriggerMode: String, Codable {
     case triplePress
     case holdToTalk
+    /// Press and hold the trigger key for `holdTriggerSeconds` to start.
+    ///
+    /// This is the mode that coexists with the key's own system function: a short
+    /// press is left entirely to macOS (so 🌐 can still switch input source), and
+    /// only a deliberate hold reaches this app. Nothing fires by accident, and no
+    /// system setting has to be sacrificed.
+    case holdDuration
+    /// Trigger key pressed while Shift is held — ⇧🌐.
+    ///
+    /// The cleanest coexistence of all: macOS assigns no meaning to this
+    /// combination, so the key keeps its own function on a plain press (switching
+    /// input source), and the combination fires instantly with no hold to wait out
+    /// and no chance of an accidental trigger.
+    case shiftCombo
     case menuBarOnly
 }
 
@@ -67,6 +91,10 @@ struct TriggerConfig: Codable {
     var tapCount: Int = 3
     var tapWindowSeconds: Double = 0.6
     var holdMinSeconds: Double = 0.25
+
+    /// How long the key must be held in `.holdDuration` mode before dictation
+    /// starts. Long enough that a normal press-and-release never reaches it.
+    var holdTriggerSeconds: Double = 1.2
 }
 
 // MARK: - Recording
@@ -96,11 +124,26 @@ struct LeadInConfig: Codable {
 }
 
 struct RecordingConfig: Codable {
-    var maxSeconds: Double = 60
+    var maxSeconds: Double = 30
     var silenceStopSeconds: Double = 2.5
     var minSpeechSeconds: Double = 1.0
     var inputDevice = InputDeviceConfig()
     var leadInDiscardMs = LeadInConfig()
+
+    /// Splitting is effectively off, and deliberately so.
+    ///
+    /// It was added on the assumption that concurrent chunk uploads would finish in
+    /// roughly the time of the slowest piece. Measured against OpenRouter that is
+    /// false: concurrent requests from one key are queued upstream, so two chunks
+    /// of a 27.8s recording took 46s and 98s — where the whole clip as a single
+    /// request takes about 12s. Splitting also repeats the full prompt per chunk
+    /// and costs cross-sentence context for punctuation.
+    ///
+    /// The timeout problem it was meant to solve is handled properly by
+    /// `timeout(forAudioBytes:)` instead. A ceiling above `maxSeconds` leaves the
+    /// machinery in place for anyone who needs it without it engaging by default.
+    var chunkTargetSeconds: Double = 60
+    var chunkMaxSeconds: Double = 120
     /// Keyed by CoreAudio device UID, plus a "default" entry. AirPods run hotter
     /// and noisier than the built-in mic, so one global threshold does not work.
     var silenceThresholdDb: [String: Double] = ["default": -45]
@@ -130,11 +173,73 @@ struct InsertionConfig: Codable {
     /// bidirectional algorithm. Adds invisible characters, so it can be turned off
     /// for targets that mishandle them (some terminals and code editors).
     var bidiIsolation: Bool = true
+
+    /// Leave every transcript on the clipboard, rather than restoring whatever was
+    /// there before.
+    ///
+    /// Synthetic ⌘V cannot report failure — if nothing is focused, the keystroke
+    /// goes nowhere and the app is none the wiser. Restoring the previous clipboard
+    /// afterwards then destroyed the only remaining copy, so a dictation that
+    /// missed its target was lost entirely. Keeping the transcript on the clipboard
+    /// means ⌘V always works, whatever happened to the paste.
+    var alwaysCopyToClipboard: Bool = true
+
+    /// Apps that render the bidi isolation marks literally, as "\u2068" escapes,
+    /// instead of applying them.
+    ///
+    /// Terminals and code editors escape non-printable characters by design — the
+    /// marks are correct Unicode, but showing them as text is worse than the
+    /// misordering they were added to prevent. Matched as case-insensitive
+    /// substrings of the bundle identifier, so variants and forks are covered
+    /// without maintaining an exhaustive list.
+    /// Deliberately narrow: **true terminals only**.
+    ///
+    /// Editors were briefly included here because VS Code displayed the marks as
+    /// "\u2068" escapes. That fixed the escapes and immediately reintroduced the
+    /// worse bug — embedded English words jumping to the start or end of the line,
+    /// changing what the sentence says. Correct word order matters more than a
+    /// visible escape, so only apps that genuinely cannot render the marks at all
+    /// are listed. Add a bundle-id fragment here if a specific app misbehaves.
+    var skipBidiForApps: [String] = [
+        "terminal", "iterm", "kitty", "alacritty", "ghostty",
+        // Claude Code's input field escapes the marks to visible "\u2068" text.
+        // VS Code's *editor* renders them correctly, so this targets the one app
+        // that misbehaves rather than the whole category — an earlier attempt at
+        // the category reintroduced the word-reordering bug everywhere.
+        "anthropic.claude",
+    ]
+
+    /// Whether the isolation marks should be applied when pasting into this app.
+    func shouldIsolateBidi(forBundleID bundleID: String?) -> Bool {
+        guard bidiIsolation else { return false }
+        guard let id = bundleID?.lowercased() else { return true }
+        return !skipBidiForApps.contains { id.contains($0.lowercased()) }
+    }
+}
+
+enum HUDPosition: String, Codable, CaseIterable {
+    case topRight, topLeft, bottomRight, bottomLeft, bottomCenter
+
+    var displayName: String {
+        switch self {
+        case .topRight: return "Top right"
+        case .topLeft: return "Top left"
+        case .bottomRight: return "Bottom right"
+        case .bottomLeft: return "Bottom left"
+        case .bottomCenter: return "Bottom centre"
+        }
+    }
 }
 
 struct HUDConfig: Codable {
     var enabled: Bool = true
-    var position: String = "bottomCenter"
+    /// Top-right by default: bottom-centre sits directly over the text field in
+    /// most apps, which is exactly where the user is looking while dictating.
+    var position: HUDPosition = .topRight
+
+    /// How long a failure stays on screen. Errors need reading, and the previous
+    /// four seconds was not enough to take in what went wrong.
+    var errorDisplaySeconds: Double = 12
 }
 
 enum DictationLanguage: String, Codable, CaseIterable {
@@ -295,7 +400,7 @@ extension Config {
                 baseURL: "https://generativelanguage.googleapis.com/v1beta",
                 model: "gemini-3.7-flash",
                 extraHeaders: ["Api-Revision": geminiAPIRevision],
-                timeoutSeconds: 45,
+                timeoutSeconds: 60,
                 note: "Key must come from a Google Cloud project WITHOUT billing enabled.",
                 modelPresets: [
                     "gemini-3.7-flash",
@@ -310,7 +415,7 @@ extension Config {
                 baseURL: "https://generativelanguage.googleapis.com/v1beta",
                 model: "gemini-3.1-pro-preview",
                 extraHeaders: ["Api-Revision": geminiAPIRevision],
-                timeoutSeconds: 45,
+                timeoutSeconds: 60,
                 note: "Key must come from a Google Cloud project WITH billing enabled.",
                 modelPresets: [
                     "gemini-3.1-pro-preview",
@@ -329,7 +434,7 @@ extension Config {
                     "HTTP-Referer": "https://localhost/farsitalkwrite",
                     "X-Title": "FarsiTalkWrite",
                 ],
-                timeoutSeconds: 45,
+                timeoutSeconds: 60,
                 note: "Needs prepaid credit. Every model below accepts audio input.",
                 modelPresets: [
                     "google/gemini-3.7-flash",

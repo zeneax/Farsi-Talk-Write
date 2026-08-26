@@ -79,7 +79,7 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
         let json: Any
         do {
             json = try await ProviderHTTP.send(
-                request, timeout: profile.timeoutSeconds, model: profile.model
+                request, timeout: profile.timeout(forAudioBytes: wav.count), model: profile.model
             )
         } catch ProviderError.http(let status, let responseBody, _)
                     where status == 400 && responseBody.lowercased().contains("reasoning") {
@@ -89,7 +89,7 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
             body.removeValue(forKey: "reasoning")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             json = try await ProviderHTTP.send(
-                request, timeout: profile.timeoutSeconds, model: profile.model
+                request, timeout: profile.timeout(forAudioBytes: wav.count), model: profile.model
             )
         }
 

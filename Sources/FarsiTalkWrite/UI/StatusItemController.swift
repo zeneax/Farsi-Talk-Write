@@ -25,10 +25,12 @@ import AppKit
 ///
 /// Left-click toggles recording outright rather than opening a menu — that is what
 /// makes it a real trigger. The menu lives on right-click.
+@MainActor
 final class StatusItemController {
 
     var onToggleRecording: (() -> Void)?
     var onRetryLast: (() -> Void)?
+    var onOpenRecordings: (() -> Void)?
     /// How many recordings are saved but not yet successfully transcribed.
     var pendingRetryCount = 0
     var hasRecordingToRetry: Bool { pendingRetryCount > 0 }
@@ -51,7 +53,14 @@ final class StatusItemController {
 
     init(config: Config) {
         self.config = config
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Fixed width, deliberately.
+        //
+        // A variable-length item that shows a ticking MM:SS changes width every
+        // second, and each change makes macOS re-lay-out the entire menu bar. On a
+        // full bar there is no slack, so other items — notably the input-source
+        // (keyboard language) indicator — get evicted and restored repeatedly.
+        // The elapsed time lives in the HUD instead, where it costs nobody a slot.
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         statusItem.isVisible = true
 
@@ -139,7 +148,22 @@ final class StatusItemController {
     // MARK: - State rendering
 
     func update(state: DictationController.State) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.update(state: state) }
+            return
+        }
+
+        // The elapsed/level values change ten times a second; redrawing the status
+        // item that often is wasted work now that it shows only an icon.
+        let sameStage: Bool
+        switch (self.state, state) {
+        case (.recording, .recording): sameStage = true
+        case (.transcribing, .transcribing), (.transcribingChunks, .transcribingChunks): sameStage = true
+        default: sameStage = false
+        }
+
         self.state = state
+        if sameStage { return }
         switch state {
         case .recording, .transcribing: startPulse()
         default: stopPulse()
@@ -152,24 +176,23 @@ final class StatusItemController {
 
         let symbol: String
         let tint: NSColor?
-        var title = ""
 
         switch state {
         case .idle:
             symbol = "mic"
             tint = nil
-        case .recording(let elapsed, _):
+        case .recording:
             symbol = "mic.fill"
             tint = .systemRed
-            // Elapsed shown here too, so the countdown is visible even with the
-            // HUD switched off.
-            title = " \(Self.mmss(elapsed))"
-        case .transcribing:
+        case .transcribing, .transcribingChunks:
             symbol = "waveform"
             tint = .systemOrange
         case .inserted:
             symbol = "checkmark.circle.fill"
             tint = .systemGreen
+        case .copiedToClipboard:
+            symbol = "doc.on.clipboard.fill"
+            tint = .systemBlue
         case .failed:
             symbol = "exclamationmark.triangle.fill"
             tint = .systemRed
@@ -180,8 +203,8 @@ final class StatusItemController {
         if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "FarsiTalkWrite") {
             image.isTemplate = (tint == nil)
             button.image = image
-            button.title = title
-            button.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
+            button.title = ""
+            button.imagePosition = .imageOnly
         } else {
             // An image-only button with a nil image is zero-width and therefore
             // invisible in the menu bar, which looks exactly like a crash. Always
@@ -189,12 +212,15 @@ final class StatusItemController {
             FTWLog.warn("SF Symbol “\(symbol)” unavailable; falling back to a text status item.")
             button.image = nil
             button.imagePosition = .noImage
-            button.title = title.isEmpty ? "ف" : "ف\(title)"
+            button.title = "ف"
         }
 
-        if case .failed(let why) = state {
+        switch state {
+        case .failed(let why):
             button.toolTip = why
-        } else {
+        case .recording(let elapsed, _):
+            button.toolTip = "Recording \(Self.mmss(elapsed)) — click to stop"
+        default:
             button.toolTip = "FarsiTalkWrite — click to dictate, right-click for options"
         }
     }
@@ -202,9 +228,11 @@ final class StatusItemController {
     private func startPulse() {
         guard pulseTimer == nil else { return }
         pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
-            guard let self, let button = self.statusItem.button else { return }
-            self.pulsePhase = (self.pulsePhase + 1) % 2
-            button.alphaValue = self.pulsePhase == 0 ? 1.0 : 0.55
+            MainActor.assumeIsolated {
+                guard let self, let button = self.statusItem.button else { return }
+                self.pulsePhase = (self.pulsePhase + 1) % 2
+                button.alphaValue = self.pulsePhase == 0 ? 1.0 : 0.55
+            }
         }
     }
 
@@ -240,6 +268,13 @@ final class StatusItemController {
             menu.addItem(retry)
         }
 
+        let recordings = NSMenuItem(
+            title: pendingRetryCount > 0 ? "Recordings… (\(pendingRetryCount) waiting)" : "Recordings…",
+            action: #selector(menuRecordings), keyEquivalent: ""
+        )
+        recordings.target = self
+        menu.addItem(recordings)
+
         menu.addItem(.separator())
         menu.addItem(languageMenuItem())
         menu.addItem(providerMenuItem())
@@ -269,10 +304,16 @@ final class StatusItemController {
             return "Ready · \(config.language.displayName) · \(profile?.model ?? "no provider")"
         case .recording(let elapsed, _):
             return "Recording \(Self.mmss(elapsed)) / \(Self.mmss(config.recording.maxSeconds))"
-        case .transcribing:
-            return "Transcribing…"
+        case .transcribing(let attempt, let total, let elapsed):
+            return attempt == 1
+                ? String(format: "Sending… %.0fs", elapsed)
+                : String(format: "Retrying %d/%d… %.0fs", attempt, total, elapsed)
+        case .transcribingChunks(let done, let total):
+            return "Sending \(done)/\(total) parts…"
         case .inserted:
             return "Inserted ✓"
+        case .copiedToClipboard:
+            return "Copied to clipboard — ⌘V to paste"
         case .failed(let why):
             return "Error: \(why.prefix(60))"
         }
@@ -364,7 +405,9 @@ final class StatusItemController {
         let keyName = HotkeyMonitor.keyName(for: config.trigger.triggerKeyCode)
         let options: [(TriggerMode, String)] = [
             (.triplePress, "Triple-press \(keyName)"),
-            (.holdToTalk, "Hold \(keyName)"),
+            (.holdToTalk, "Hold \(keyName) (push to talk)"),
+            (.holdDuration, "Hold \(keyName) for \(String(format: "%.1f", config.trigger.holdTriggerSeconds))s"),
+            (.shiftCombo, "⇧ + \(keyName)"),
             (.menuBarOnly, "Menu bar only"),
         ]
 
@@ -398,6 +441,7 @@ final class StatusItemController {
 
     @objc private func menuToggle() { onToggleRecording?() }
     @objc private func menuRetry() { onRetryLast?() }
+    @objc private func menuRecordings() { onOpenRecordings?() }
     @objc private func menuToggleHUD() { onToggleHUD?() }
     @objc private func menuSettings() { onOpenSettings?() }
     @objc private func menuSetupGuide() { onOpenSetupGuide?() }

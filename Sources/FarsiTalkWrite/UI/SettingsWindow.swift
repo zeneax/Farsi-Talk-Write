@@ -22,6 +22,7 @@ import AppKit
 
 /// Where "configurable" becomes real rather than a JSON file you have to remember
 /// the shape of. Four tabs; the Providers tab is the important one.
+@MainActor
 final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
 
     var config: Config { didSet { if window != nil { reloadAll() } } }
@@ -233,7 +234,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
         let stack = verticalForm()
 
         triggerPopup.removeAllItems()
-        triggerPopup.addItems(withTitles: ["Triple-press key", "Hold key", "Menu bar only"])
+        triggerPopup.addItems(withTitles: ["Triple-press key", "Hold key (push to talk)", "Hold key for 1.2s", "Shift + key", "Menu bar only"])
         triggerPopup.target = self
         triggerPopup.action = #selector(commitTrigger)
 
@@ -440,7 +441,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
     }
 
     private func loadTriggerForm() {
-        let modes: [TriggerMode] = [.triplePress, .holdToTalk, .menuBarOnly]
+        let modes: [TriggerMode] = [.triplePress, .holdToTalk, .holdDuration, .shiftCombo, .menuBarOnly]
         triggerPopup.selectItem(at: modes.firstIndex(of: config.trigger.mode) ?? 0)
         keyCodePopup.selectItem(withTag: config.trigger.triggerKeyCode)
         tapCountField.stringValue = String(config.trigger.tapCount)
@@ -668,7 +669,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
     // MARK: - Trigger / recording / prompt actions
 
     @objc private func commitTrigger() {
-        let modes: [TriggerMode] = [.triplePress, .holdToTalk, .menuBarOnly]
+        let modes: [TriggerMode] = [.triplePress, .holdToTalk, .holdDuration, .shiftCombo, .menuBarOnly]
         config.trigger.mode = modes[max(0, min(modes.count - 1, triggerPopup.indexOfSelectedItem))]
         if let tag = keyCodePopup.selectedItem?.tag { config.trigger.triggerKeyCode = tag }
         config.trigger.tapCount = max(2, Int(tapCountField.stringValue) ?? 3)

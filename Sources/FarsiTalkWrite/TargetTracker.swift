@@ -27,9 +27,16 @@ import AppKit
 /// away from the app you were typing in, and without restoration the Farsi text
 /// would paste into whatever gained focus instead. The fn trigger rarely needs it,
 /// but both paths run the same code so there is only one behaviour to reason about.
+@MainActor
 final class TargetTracker {
 
     private(set) var target: NSRunningApplication?
+
+    /// Bundle identifier of the app the text is destined for, used to decide
+    /// whether it can render invisible Unicode marks.
+    var targetBundleID: String? {
+        target?.bundleIdentifier ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
 
     /// Called at the moment the trigger fires, before any UI is shown.
     func capture() {
