@@ -433,9 +433,15 @@ extension Config {
                 displayName: "OpenRouter",
                 kind: .openAICompatible,
                 baseURL: "https://openrouter.ai/api/v1",
-                // 3.7 Flash is audio-capable and, on OpenRouter, actually cheaper
-                // than buying the same model from Google directly.
-                model: "google/gemini-3.7-flash",
+                // Flash is audio-capable and, on OpenRouter, actually cheaper than
+                // buying the same model from Google directly.
+                //
+                // 3.6 rather than 3.7 on measured latency: across 18 recordings it
+                // returned in 1.5x the audio length on average, and it is the
+                // version this app's Persian prompt has actually been exercised
+                // against. 3.7 is the first preset below, so switching is a menu
+                // choice in Settings, not an edit here.
+                model: "google/gemini-3.6-flash",
                 extraHeaders: [
                     "HTTP-Referer": "https://localhost/farsitalkwrite",
                     "X-Title": "FarsiTalkWrite",
