@@ -50,12 +50,13 @@ enum TextInserter {
         let prepared = bidiIsolation ? BidiText.directionallyMarked(cleaned) : cleaned
 
         switch mode {
-        case .paste: try paste(prepared, keepOnClipboard: keepOnClipboard)
+        case .paste: try paste(prepared, clean: cleaned, keepOnClipboard: keepOnClipboard)
         case .type:
             // Typed directly, so nothing lands on the clipboard unless asked.
+            // What lands is the *unmarked* text, for the reason given in `paste`.
             if keepOnClipboard {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(prepared, forType: .string)
+                NSPasteboard.general.setString(cleaned, forType: .string)
             }
             try typeUnicode(prepared)
         }
@@ -66,7 +67,7 @@ enum TextInserter {
     /// Clipboard round-trip is the reliable path for RTL Farsi: synthetic ⌘V is
     /// handled correctly by essentially every app, where synthesised key events
     /// for non-Latin text are not.
-    private static func paste(_ text: String, keepOnClipboard: Bool) throws {
+    private static func paste(_ text: String, clean: String, keepOnClipboard: Bool) throws {
         let pasteboard = NSPasteboard.general
         let saved = keepOnClipboard ? [] : snapshot(pasteboard)
 
@@ -76,10 +77,28 @@ enum TextInserter {
 
         try postCommandV()
 
-        // When keeping it, we stop here: the transcript stays on the clipboard so
-        // ⌘V works even if the paste above reached nothing. Restoring here is what
-        // previously destroyed transcripts that missed their target.
-        guard !keepOnClipboard else { return }
+        // When keeping it, the transcript stays on the clipboard so ⌘V works even
+        // if the paste above reached nothing. Restoring the *previous* contents
+        // here is what once destroyed transcripts that missed their target.
+        //
+        // What stays is the unmarked text. The isolation marks earn their place
+        // only in the destination being pasted into right now; carried onward by a
+        // later ⌘V they are invisible passengers that get committed to files and
+        // shown as literal "\u2068" escapes in terminals. Swapping them out costs
+        // nothing here — a transcript is still on the clipboard either way, so a
+        // missed paste stays recoverable.
+        if keepOnClipboard {
+            guard text != clean else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                guard pasteboard.changeCount == ourChangeCount else {
+                    FTWLog.info("Clipboard changed during paste; leaving the new contents alone.")
+                    return
+                }
+                pasteboard.clearContents()
+                pasteboard.setString(clean, forType: .string)
+            }
+            return
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             guard pasteboard.changeCount == ourChangeCount else {
