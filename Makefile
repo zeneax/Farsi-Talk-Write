@@ -61,13 +61,23 @@ UNIVERSAL_DEPLOY  := 12.0
 
 .PHONY: all build bundle sign install clean run check doctor icon signing-cert universal
 
+# `signing-cert` is the first rule below, which would otherwise make it the
+# default goal — a bare `make` would mint a certificate instead of building.
+.DEFAULT_GOAL := all
+
 # Creates the stable self-signed code-signing identity used by `sign`. Run once.
 # macOS Security cannot read OpenSSL 3's default PKCS#12 encryption, hence the
 # explicit legacy algorithms.
+# The whole recipe is one shell invocation on purpose. Split across lines, the
+# early `exit 0` only left its own subshell and the import below still ran, so
+# every extra `make signing-cert` minted a *second* identity. codesign then
+# refused the ambiguous name, and picking the wrong twin would have re-signed
+# the app under a new key — which is what TCC grants are bound to.
 signing-cert:
-	@security find-certificate -c "FarsiTalkWrite Dev" >/dev/null 2>&1 \
-		&& echo "Certificate already exists." && exit 0 || true
-	@TMP=$$(mktemp -d); \
+	@if security find-certificate -c "FarsiTalkWrite Dev" >/dev/null 2>&1; then \
+		echo "Certificate already exists."; \
+	else \
+	TMP=$$(mktemp -d); \
 	openssl req -newkey rsa:2048 -nodes -keyout $$TMP/key.pem -x509 -days 3650 \
 		-out $$TMP/cert.pem -subj "/CN=FarsiTalkWrite Dev/O=FarsiTalkWrite/C=US" \
 		-addext "extendedKeyUsage=codeSigning" \
@@ -78,8 +88,9 @@ signing-cert:
 		-macalg sha1 -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES 2>/dev/null; \
 	security import $$TMP/b.p12 -k ~/Library/Keychains/login.keychain-db -P ftw \
 		-T /usr/bin/codesign -T /usr/bin/security; \
-	rm -rf $$TMP
-	@echo "Created “FarsiTalkWrite Dev”. Rebuild with: make install"
+	rm -rf $$TMP; \
+	echo "Created “FarsiTalkWrite Dev”. Rebuild with: make install"; \
+	fi
 
 
 all: bundle
