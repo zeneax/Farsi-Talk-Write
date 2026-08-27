@@ -129,11 +129,19 @@ user their language switching.
 *logical* order; the bidi algorithm reorders it visually, flinging English words
 and sentence-final punctuation to the wrong end of the line. See `BidiText`.
 
-**But the marks are per-destination.** Terminals and code editors render them as
-literal `\u2068` escapes. Claude Code runs *inside* VS Code, so both report
-`com.microsoft.VSCode` and cannot be distinguished — the whole bundle id is skipped.
-Fixing the escapes by skipping a broad category once reintroduced the reordering bug
-everywhere; keep `skipBidiForApps` narrow and evidence-based.
+**But the marks are per-destination.** True terminals render them as literal
+`\u2068` escapes, so `skipBidiForApps` lists those and nothing else.
+
+VS Code was on that list too, on the same reasoning. Re-measured 2026-08-27, it is
+no longer true: the marks render invisibly and correctly in both the editor and the
+Claude Code chat it hosts. Skipping them was costing real breakage — embedded
+English runs moving within the sentence, and a sentence-final `؟` rendering at the
+far end of the line, which a Persian reader sees as the start.
+
+Keep this list narrow and **evidence-based**: before adding an editor, paste a mixed
+Persian/English sentence ending in `؟` into it and look at the result. Skipping a
+broad category to chase escapes reintroduces the reordering bug, which is the worse
+of the two — it changes what the sentence says.
 
 **Synthetic ⌘V cannot report failure.** `CGEvent` posts the keystroke and returns
 successfully whether or not anything received it. There is no way to detect a paste

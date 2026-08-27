@@ -201,17 +201,18 @@ struct InsertionConfig: Codable {
     /// visible escape, so only apps that genuinely cannot render the marks at all
     /// are listed. Add a bundle-id fragment here if a specific app misbehaves.
     var skipBidiForApps: [String] = [
-        "terminal", "iterm", "kitty", "alacritty", "ghostty",
-        // VS Code, which also hosts Claude Code — so an agent chat and the editor
-        // share one bundle identifier and cannot be told apart here. Both escape
-        // the marks to visible "\u200F" text.
+        // Only true terminals remain: they render the marks as literal "\u2068"
+        // escapes because there is no bidi-aware layout engine behind them.
         //
-        // The marks only affect *visual* rendering; logical order is always
-        // correct. Text destined for a file, a terminal or a model therefore loses
-        // nothing by going plain, whereas visible escapes are pure noise. Apps
-        // where a human reads mixed Persian and English — Notes, Slack, Safari,
-        // Pages — keep the marks and keep correct placement.
-        "vscode", "vscodium", "cursor", "windsurf", "anthropic.claude",
+        // VS Code and its forks were listed here for the same reason, but that is
+        // no longer true — measured 2026-08-27, the marks render invisibly and
+        // correctly in both the editor and the Claude Code chat it hosts. Skipping
+        // them cost exactly what the note above warns about: embedded English runs
+        // moving, and a sentence-final "؟" jumping to the far end of the line,
+        // where a Persian reader sees it as the start. Correct placement beats a
+        // hypothetical escape, so do not re-add an editor here without pasting a
+        // mixed Persian/English sentence into it and looking at the result.
+        "terminal", "iterm", "kitty", "alacritty", "ghostty",
     ]
 
     /// Whether the isolation marks should be applied when pasting into this app.
