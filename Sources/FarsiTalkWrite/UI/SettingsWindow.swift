@@ -618,9 +618,13 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
         }
     }
 
-    /// Sends a short generated tone through the real transcription path. It is not
-    /// speech, so an empty result is a pass: it proves auth, endpoint, and that the
-    /// model accepts audio at all.
+    /// Sends a one-second silent clip through the real transcription path.
+    ///
+    /// What is being tested is auth, endpoint, and that the model accepts audio at
+    /// all — not transcription quality. So *either* outcome is a pass: text back
+    /// means the round trip works, and no text back means the same. The prompt no
+    /// longer asks the model to return nothing for silence (that instruction made
+    /// it refuse good long recordings), so this now usually takes the text path.
     @objc private func testConnection() {
         commitProviderEdits()
         let id = selectedProviderID
@@ -636,7 +640,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
             } catch ProviderError.emptyResponse {
                 let model = config.providers[id]?.model ?? ""
                 let tier = ProviderRegistry.isFreeTierModel(model) ? "free tier" : "paid"
-                self.report("✓ Connected — \(model) (\(tier)). It accepted the audio and correctly returned no text for silence.", good: true)
+                self.report("✓ Connected — \(model) (\(tier)). It accepted the audio and returned no text.", good: true)
             } catch {
                 self.report("✗ \(error.localizedDescription)", good: false)
             }

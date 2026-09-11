@@ -72,11 +72,7 @@ enum ProviderRegistry {
             } catch let error as ProviderError {
                 guard error.isTransient else { throw error }
                 lastError = error
-                if case .emptyResponse = error {
-                    FTWLog.warn("Attempt \(attempt)/\(attempts): provider returned no text — retrying in case it is rate-limited.")
-                } else {
-                    FTWLog.warn("Transcription attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
-                }
+                FTWLog.warn("Transcription attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
             } catch {
                 lastError = error
                 FTWLog.warn("Transcription attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")

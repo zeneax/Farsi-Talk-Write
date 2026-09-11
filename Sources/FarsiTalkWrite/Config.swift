@@ -125,8 +125,13 @@ struct LeadInConfig: Codable {
 
 struct RecordingConfig: Codable {
     var maxSeconds: Double = 30
-    var silenceStopSeconds: Double = 2.5
-    var minSpeechSeconds: Double = 1.0
+    /// How long a pause ends a recording. This is dead air the user sits through
+    /// after every sentence, before the request is even sent, so it is tuned as
+    /// short as it can be without clipping someone who pauses mid-thought.
+    var silenceStopSeconds: Double = 1.4
+    /// Silence-stop only arms after this much speech, so the pause before you
+    /// start talking cannot end the recording immediately.
+    var minSpeechSeconds: Double = 0.8
     var inputDevice = InputDeviceConfig()
     var leadInDiscardMs = LeadInConfig()
 
@@ -361,7 +366,6 @@ extension Config {
     - کلمات انگلیسی (مثل PDF، Slack، Claude Code) را به همان خط لاتین بنویس و \
     دقیقاً در همان جایی بگذار که گفته شده‌اند. آن‌ها را به اول یا آخر جمله منتقل نکن \
     و به فارسی ترجمه یا آوانویسی نکن.
-    - اگر صدا خالی یا نامفهوم بود، رشتهٔ خالی برگردان.
     """
 
     static let defaultEnglishPrompt = """
@@ -372,7 +376,6 @@ extension Config {
     stutters, and repeated words.
     - Keep technical terms, product names, and acronyms in their normal written \
     form (PDF, GitHub, OAuth, macOS).
-    - If the audio is empty or unintelligible, return an empty string.
     """
 
     /// Deliberately instructs the model to follow the speaker rather than pick a
@@ -392,7 +395,6 @@ extension Config {
     فارسی (، ؛ ؟) را رعایت کن.
     - کلمات انگلیسی داخل جملهٔ فارسی را به همان خط لاتین و دقیقاً در همان جای \
     گفته‌شده بنویس؛ آن‌ها را ترجمه یا آوانویسی نکن و جابه‌جا نکن.
-    - If the audio is empty or unintelligible, return an empty string.
     """
 
     static let geminiAPIRevision = "2026-05-20"

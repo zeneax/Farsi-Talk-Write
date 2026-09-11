@@ -114,10 +114,16 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
         if let content = message["content"] as? String {
             return content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        // Some servers return content as an array of parts.
+        // Some servers return content as an array of parts. Take the last one
+        // rather than joining them all: on Gemini 3 a thought summary arrives as
+        // an ordinary text part, not a reasoning part, and joining glues the
+        // model's internal monologue onto the front of the transcript — which
+        // then gets pasted at the user's cursor. With reasoning at minimum there
+        // is normally one part and this returns it unchanged; it earns its keep
+        // on the runs where the model narrates itself anyway.
         if let parts = message["content"] as? [[String: Any]] {
-            let joined = parts.compactMap { $0["text"] as? String }.joined()
-            return joined.trimmingCharacters(in: .whitespacesAndNewlines)
+            let texts = parts.compactMap { $0["text"] as? String }.filter { !$0.isEmpty }
+            return (texts.last ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return ""
     }

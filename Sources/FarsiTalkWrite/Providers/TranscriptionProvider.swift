@@ -69,14 +69,14 @@ enum ProviderError: LocalizedError {
 
         case .emptyResponse:
             return """
-            No speech was found in this recording.
+            The provider accepted the recording but sent no text back.
 
-            The audio was sent and understood — it simply contained nothing to \
-            transcribe. Usually that means the microphone was too quiet, the wrong \
-            input device was selected, or the trigger fired by accident.
+            The audio itself was fine — it was checked for speech before it was \
+            sent. An empty answer usually means the provider is busy and answered \
+            without doing the work, which clears on its own.
 
-            The recording is kept, so you can play it back in Recordings to hear \
-            what was captured.
+            The recording is kept. Open Recordings to play it back and send it \
+            again.
             """
 
         case .malformedResponse(let detail):
@@ -112,15 +112,19 @@ enum ProviderError: LocalizedError {
         case .malformedResponse:
             return true
         case .emptyResponse:
-            // Retryable, despite sounding final.
+            // Not retryable, because a retry cannot change the answer.
             //
-            // A provider under upstream rate limiting can answer 200 with empty
-            // content rather than a 429 — observed here: a clip that transcribes
-            // perfectly on its own came back empty seconds after a documented 429.
-            // Treating empty as permanent discarded a good recording. A genuinely
-            // silent clip costs three cheap calls to confirm, which is the better
-            // trade.
-            return true
+            // Every request goes out at temperature 0, so re-sending identical
+            // bytes returns an identical empty response — three attempts and two
+            // seconds of backoff to reconfirm what the first one said.
+            //
+            // This used to be retryable to cover two cases. Silence is now
+            // decided locally before anything is sent (`Recording.seemsSilent`),
+            // so it no longer reaches here at all. The other — a provider under
+            // upstream rate limiting answering 200-with-empty instead of 429 —
+            // is real but rare, and the recording is kept in `pending/`, so it
+            // costs one click in Recordings rather than a tax on every dictation.
+            return false
         case .missingAPIKey, .badURL:
             return false
         }
@@ -152,12 +156,29 @@ enum ProviderError: LocalizedError {
 // MARK: - Shared HTTP helpers
 
 enum ProviderHTTP {
+    /// Sessions are cached per timeout rather than built per request.
+    ///
+    /// A fresh `URLSession` cannot reuse a connection, so every dictation paid a
+    /// full DNS + TCP + TLS handshake before a single byte of audio moved —
+    /// hundreds of milliseconds, and more over a VPN. Keeping one session per
+    /// timeout lets the connection stay warm between dictations, and stops the
+    /// discarded sessions leaking: an un-invalidated session is never freed.
+    private static let sessionLock = NSLock()
+    nonisolated(unsafe) private static var sessions: [Double: URLSession] = [:]
+
     static func session(timeout: Double) -> URLSession {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+
+        if let existing = sessions[timeout] { return existing }
+
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout + 15
         configuration.waitsForConnectivity = false
-        return URLSession(configuration: configuration)
+        let session = URLSession(configuration: configuration)
+        sessions[timeout] = session
+        return session
     }
 
     /// Returns the parsed JSON as `Any`, not `[String: Any]`: the Interactions API
