@@ -251,6 +251,19 @@ struct HUDConfig: Codable {
     /// How long a failure stays on screen. Errors need reading, and the previous
     /// four seconds was not enough to take in what went wrong.
     var errorDisplaySeconds: Double = 12
+
+    /// Audible cues when recording starts and stops.
+    ///
+    /// Optional, not a plain `Bool` with a default: the synthesised decoder
+    /// requires every key it knows about, so adding a non-optional field here
+    /// would make an existing config.json fail to decode — and a config that
+    /// fails to decode is moved aside and replaced with defaults, silently
+    /// resetting the trigger mode and everything else. Optional decodes as nil
+    /// when the key is absent, so old files keep working.
+    var soundCues: Bool?
+
+    /// Defaults to on for a config written before the setting existed.
+    var playsSoundCues: Bool { soundCues ?? true }
 }
 
 enum DictationLanguage: String, Codable, CaseIterable {
@@ -287,9 +300,11 @@ struct UIConfig: Codable {
 
 struct Config: Codable {
     var schemaVersion: Int = 1
-    /// OpenRouter by default: Google's inference endpoint is unreachable from some
-    /// networks (it accepts the request, then never returns a response), whereas
-    /// OpenRouter resells the same models — and 3.7 Flash for less.
+    /// OpenRouter by default, and measurably the right choice rather than a
+    /// workaround: against the same model and clip it is slightly faster than
+    /// going to Google directly and considerably more consistent, and it does not
+    /// show the bursts of zero-byte 404s Google's endpoint produces from some
+    /// networks. It also resells the same models for less. See CLAUDE.md.
     var activeProvider: String = "openrouter"
     var providers: [String: ProviderProfile] = [:]
     var fallbackProvider: String?

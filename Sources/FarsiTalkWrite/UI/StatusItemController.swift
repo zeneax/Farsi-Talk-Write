@@ -193,6 +193,9 @@ final class StatusItemController {
         case .copiedToClipboard:
             symbol = "doc.on.clipboard.fill"
             tint = .systemBlue
+        case .noSpeech:
+            symbol = "mic.slash"
+            tint = .systemOrange
         case .failed:
             symbol = "exclamationmark.triangle.fill"
             tint = .systemRed
@@ -314,6 +317,8 @@ final class StatusItemController {
             return "Inserted ✓"
         case .copiedToClipboard:
             return "Copied to clipboard — ⌘V to paste"
+        case .noSpeech:
+            return "No speech heard — nothing sent"
         case .failed(let why):
             return "Error: \(why.prefix(60))"
         }

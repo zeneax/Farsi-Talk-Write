@@ -27,6 +27,25 @@ import AppKit
 /// AppKit traps when touched off the main thread. Declaring the isolation makes the
 /// compiler enforce what was previously only a convention — a background callback
 /// mutating `state` is now a build error rather than a crash at runtime.
+/// Audible start/stop cues.
+///
+/// Without one there is no signal that capture has begun, so the first word is
+/// spoken into dead air — and since the lead-in is deliberately discarded, that
+/// word really is lost. The sounds are preloaded because loading on first use
+/// would add latency at exactly the moment the cue has to be immediate.
+@MainActor
+private enum Cue {
+    static let start = NSSound(named: NSSound.Name("Tink"))
+    static let stop = NSSound(named: NSSound.Name("Pop"))
+
+    static func play(_ sound: NSSound?, enabled: Bool) {
+        guard enabled, let sound else { return }
+        // Retrigger cleanly if the previous cue is still sounding.
+        if sound.isPlaying { sound.stop() }
+        sound.play()
+    }
+}
+
 @MainActor
 final class DictationController {
 
@@ -41,6 +60,11 @@ final class DictationController {
         case inserted
         /// Nothing could be typed into, so the text is on the clipboard instead.
         case copiedToClipboard
+        /// The recording held no speech, decided locally without sending it.
+        /// Shown rather than silently returning to idle: a wrong rejection would
+        /// otherwise be invisible, and "nothing happened" is indistinguishable
+        /// from a trigger that never fired.
+        case noSpeech
         case failed(String)
 
         var isRecording: Bool {
@@ -131,6 +155,7 @@ final class DictationController {
         do {
             try recorder.start(config: config)
             state = .recording(elapsed: 0, level: -120)
+            Cue.play(Cue.start, enabled: config.hud.playsSoundCues)
         } catch {
             fail(error.localizedDescription)
         }
@@ -211,6 +236,8 @@ final class DictationController {
     // MARK: - Pipeline
 
     private func handle(_ recording: AudioRecorder.Recording) {
+        Cue.play(Cue.stop, enabled: config.hud.playsSoundCues)
+
         if case .failed(let why) = recording.reason {
             fail(why)
             return
@@ -232,7 +259,11 @@ final class DictationController {
                 format: "Recording contained no speech (peak %.0f dBFS / mean %.0f dBFS); not sending.",
                 Double(recording.peakDb), Double(recording.meanDb)
             ))
-            state = .idle
+            state = .noSpeech
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                if case .noSpeech = self.state { self.state = .idle }
+            }
             return
         }
 
