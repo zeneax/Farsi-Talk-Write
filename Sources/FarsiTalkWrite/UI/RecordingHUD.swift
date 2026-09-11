@@ -78,6 +78,9 @@ final class RecordingHUD {
             hide(after: 8.0)
         case .failed:
             hide(after: errorDisplaySeconds)
+        case .noSpeech:
+            // Long enough to read, short enough not to nag after a mis-trigger.
+            hide(after: 1.8)
         case .recording, .transcribing, .transcribingChunks:
             break
         }
@@ -198,6 +201,13 @@ private final class HUDContentView: NSView {
         case .failed(let why):
             stage = .failed
             message = why
+            stopPulse()
+        case .noSpeech:
+            // Deliberately not `.failed`: nothing went wrong, and nothing was
+            // saved to retry. It reports that the app heard nothing, so a wrong
+            // rejection is visible instead of looking like a dead trigger.
+            stage = .done
+            message = "No speech heard — nothing sent\nصدایی شنیده نشد"
             stopPulse()
         }
         needsDisplay = true

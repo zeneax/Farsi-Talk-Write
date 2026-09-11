@@ -135,6 +135,12 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
         case .copiedToClipboard:
             dictationStatusLabel.stringValue = "✓ Copied to clipboard (nothing was focused to type into)"
             dictationStatusLabel.textColor = .systemGreen
+        case .noSpeech:
+            // The practice step is exactly where a too-quiet microphone shows up,
+            // so name the cause rather than just reporting nothing happened.
+            dictationStatusLabel.stringValue =
+                "No speech heard — nothing was sent. Try speaking closer to the microphone."
+            dictationStatusLabel.textColor = .systemOrange
         case .failed(let why):
             dictationStatusLabel.stringValue = "✗ \(why)"
             dictationStatusLabel.textColor = .systemRed

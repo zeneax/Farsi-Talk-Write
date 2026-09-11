@@ -173,9 +173,36 @@ Two `kind` values cover everything shipped:
 endpoint"). Use `reasoning: {effort: "low"}` — measured 5.5s vs 8.1s. The provider
 retries without the field if it is rejected.
 
-Google's inference endpoint is unreachable from some networks: it accepts the
-request and then never responds (60s timeout, zero bytes), while `GET /models` and
-`countTokens` work fine. That is why OpenRouter is the default.
+Google's own endpoint is reachable but *intermittently* faulty from some
+networks, and OpenRouter is the default because of it.
+
+Re-measured 2026-09-11 against `v1beta/models/{model}:generateContent`, which is
+a different endpoint from the `/interactions` one this app's `geminiInteractions`
+kind uses. It answers in well under a second — the earlier "accepts the request
+and never responds, 60s timeout, zero bytes" reading did not reproduce. What does
+happen is bursts of **zero-byte 404s** and the occasional dropped connection:
+across ~50 probes, one burst of six plus a connection failure, with every other
+request a clean 200.
+
+So the symptom is a fast empty reply, not a hang. Do not read the old note as
+"Google is unreachable" — it is reachable, fast, and unreliable in a way that is
+easy to mistake for a bad request.
+
+Going direct is **not** faster, which is the reason not to bother. Same model,
+same 10s clip, five runs each: Google direct median 3.09s (range 2.24–5.51),
+OpenRouter median 2.99s (range 2.60–3.98). OpenRouter is marginally quicker and
+noticeably more consistent, and it does not have the 404 bursts.
+
+Two related measurements worth keeping, both taken the same day:
+
+- **Uplink here is ~3.2 MB/s.** A 30s PCM16 clip is ~1.28 MB of base64, so the
+  upload costs ~0.4s. Compressing the audio to Opus would save a fraction of a
+  second, not the seconds it looks like it should — transfer is not where the
+  time goes. A 10 KB request averaged 4.95s while a 417 KB request averaged
+  3.45s; payload size barely registers against model variance.
+- **Model latency dominates and varies wildly.** Same clip, same model, runs
+  ranging 2.2s to 6.2s, and recordings in the log where 7.3s of audio took 23s.
+  Nothing on this machine causes that and nothing on this machine fixes it.
 
 ## Data locations
 
