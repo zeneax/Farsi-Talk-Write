@@ -145,10 +145,21 @@ enum CLI {
 
         if status.needsInputMonitoring {
             Term.row("Input Monitoring", status.inputMonitoring.label, ok: status.inputMonitoring.isGranted)
+
+            // Only bare-press triggers need the 🌐 key freed. Reporting it as a
+            // failure under .shiftCombo or .holdDuration told the user to set the
+            // key to "Do Nothing" when those modes deliberately leave a plain
+            // press to macOS — following that advice costs them input-source
+            // switching for no reason. `isReady` already gates on this; the
+            // display did not.
             let fnLabel = status.fnUsage.map { "\($0.label) (\($0.rawValue))" } ?? "system default"
-            Term.row("🌐 key set to", fnLabel, ok: status.fnUsage == .doNothing)
-            if status.fnUsage != .doNothing {
-                Term.out("      → must be “Do Nothing”: \(Permissions.SettingsPane.keyboard.clickPath)")
+            if status.needsGlobeKeyFree {
+                Term.row("🌐 key set to", fnLabel, ok: status.fnUsage == .doNothing)
+                if status.fnUsage != .doNothing {
+                    Term.out("      → must be “Do Nothing”: \(Permissions.SettingsPane.keyboard.clickPath)")
+                }
+            } else {
+                Term.row("🌐 key set to", "\(fnLabel) — not required by this trigger", ok: true)
             }
         } else {
             Term.row("Input Monitoring", "not needed in menu-bar-only mode", ok: true)
