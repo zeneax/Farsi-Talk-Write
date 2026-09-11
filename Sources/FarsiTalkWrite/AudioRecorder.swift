@@ -51,9 +51,30 @@ final class AudioRecorder {
         let duration: TimeInterval
         let device: AudioInputDevice?
         let reason: StopReason
+        /// Loudest single sample of the whole recording, in dBFS.
+        let peakDb: Float
+        /// RMS of the whole recording, in dBFS.
+        let meanDb: Float
 
         /// Roughly what the provider will bill: audio is 32 tokens/second.
         var estimatedAudioTokens: Int { Int(duration * 32) }
+
+        /// Does this recording contain speech at all?
+        ///
+        /// The check has to be deterministic and happen *here*, before the audio
+        /// is ever sent. Asked to transcribe silence, the model does not answer
+        /// "silence" — it writes a fluent, invented sentence that lands at the
+        /// user's cursor looking exactly like something they said.
+        ///
+        /// The obvious alternative — telling the model in the prompt to return
+        /// nothing when it hears nothing — is worse, and was tried: it makes the
+        /// model refuse perfectly good long recordings instead.
+        ///
+        /// Thresholds measured the way ffmpeg's `volumedetect` reports them: an
+        /// empty room is about -32 dB peak / -50 dB mean, actual speech about
+        /// -0 / -20. Both conditions must hold, so one loud noise in an otherwise
+        /// silent room still counts as something worth sending.
+        var seemsSilent: Bool { peakDb < -30 && meanDb < -45 }
     }
 
     enum RecorderError: LocalizedError {
@@ -109,6 +130,12 @@ final class AudioRecorder {
     private var silentSecondsSeen: Double = 0
     private var framesToDiscard: Int = 0
 
+    // Running loudness over the whole recording, so the pre-flight silence check
+    // costs nothing: the per-buffer level meter already walks these samples.
+    private var sumOfSquares: Double = 0
+    private var framesAnalysed: Int = 0
+    private var peakAmplitude: Double = 0
+
     // Retained so the tap can be rebuilt after a device reconfiguration.
     private var reconfigureCount = 0
     private var leadInDefaultMs: Int = 150
@@ -135,6 +162,9 @@ final class AudioRecorder {
         maxSeconds = recording.maxSeconds
         speechSecondsSeen = 0
         silentSecondsSeen = 0
+        sumOfSquares = 0
+        framesAnalysed = 0
+        peakAmplitude = 0
         reconfigureCount = 0
         leadInDefaultMs = recording.leadInDiscardMs.defaultMs
         leadInBluetoothMs = recording.leadInDiscardMs.bluetoothMs
@@ -240,14 +270,22 @@ final class AudioRecorder {
         let duration = Double(samples.count / 2) / Self.targetSampleRate
         let wav = Self.wavData(fromPCM16: samples, sampleRate: Self.targetSampleRate, channels: 1)
 
+        let peakDb = Self.dB(peakAmplitude)
+        let meanDb = Self.dBFS(sumOfSquares: sumOfSquares, frameCount: framesAnalysed)
+
         let result = Recording(
             wav: wav,
             duration: duration,
             device: currentDevice,
-            reason: reason
+            reason: reason,
+            peakDb: peakDb,
+            meanDb: meanDb
         )
 
-        FTWLog.info(String(format: "Recording finished: %.1fs (%@)", duration, reason.label))
+        FTWLog.info(String(
+            format: "Recording finished: %.1fs (%@), peak %.0f dBFS / mean %.0f dBFS",
+            duration, reason.label, Double(peakDb), Double(meanDb)
+        ))
 
         startedAt = nil
         onMain { self.onFinished?(result) }
@@ -311,7 +349,12 @@ final class AudioRecorder {
             guard frameCount > 0 else { return }
         }
 
-        let level = Self.dBFS(pointer, frameCount: frameCount)
+        let loudness = Self.loudness(pointer, frameCount: frameCount)
+        sumOfSquares += loudness.sumOfSquares
+        framesAnalysed += frameCount
+        peakAmplitude = max(peakAmplitude, loudness.peak)
+
+        let level = Self.dBFS(sumOfSquares: loudness.sumOfSquares, frameCount: frameCount)
         let seconds = Double(frameCount) / Self.targetSampleRate
         updateSilenceState(level: level, seconds: seconds)
 
@@ -321,16 +364,29 @@ final class AudioRecorder {
         onMain { self.onLevel?(level) }
     }
 
-    private static func dBFS(_ samples: UnsafePointer<Int16>, frameCount: Int) -> Float {
-        guard frameCount > 0 else { return -120 }
+    /// Sum of squares and peak amplitude in one pass, so the level meter and the
+    /// whole-recording loudness are paid for together rather than twice.
+    private static func loudness(
+        _ samples: UnsafePointer<Int16>, frameCount: Int
+    ) -> (sumOfSquares: Double, peak: Double) {
         var sum: Double = 0
+        var peak: Double = 0
         for index in 0..<frameCount {
             let value = Double(samples[index]) / 32768.0
             sum += value * value
+            peak = max(peak, abs(value))
         }
-        let rms = (sum / Double(frameCount)).squareRoot()
-        guard rms > 0 else { return -120 }
-        return Float(max(-120, 20 * log10(rms)))
+        return (sum, peak)
+    }
+
+    private static func dBFS(sumOfSquares: Double, frameCount: Int) -> Float {
+        guard frameCount > 0 else { return -120 }
+        return dB((sumOfSquares / Double(frameCount)).squareRoot())
+    }
+
+    private static func dB(_ amplitude: Double) -> Float {
+        guard amplitude > 0 else { return -120 }
+        return Float(max(-120, 20 * log10(amplitude)))
     }
 
     /// Silence-stop only arms after enough speech has been heard, so a long pause

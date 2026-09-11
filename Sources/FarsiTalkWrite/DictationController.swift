@@ -223,6 +223,19 @@ final class DictationController {
             return
         }
 
+        // Silence is decided here, from the audio itself, rather than by asking
+        // the model what it heard. A silent clip sent anyway does not come back
+        // empty — it comes back as a confident, invented sentence. See
+        // `Recording.seemsSilent`.
+        guard !recording.seemsSilent else {
+            FTWLog.info(String(
+                format: "Recording contained no speech (peak %.0f dBFS / mean %.0f dBFS); not sending.",
+                Double(recording.peakDb), Double(recording.meanDb)
+            ))
+            state = .idle
+            return
+        }
+
         // Persist before doing anything that can fail. If transcription dies —
         // network drop, timeout, quota — the audio is still on disk and can be
         // retried instead of the sentence being lost.
