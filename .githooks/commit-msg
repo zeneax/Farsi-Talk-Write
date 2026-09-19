@@ -1,0 +1,15 @@
+#!/bin/sh
+# Commits here are authored by Shahram / Zeneax and nobody else.
+# Strip any AI attribution a tool may have appended, whatever added it.
+msg="$1"
+before=$(cksum <"$msg")
+perl -0777 -i -pe '
+  s/^Co-authored-by:.*(?:claude|anthropic)\b.*\n//mgi;
+  s/^.*Generated with \[?Claude Code\]?.*\n//mgi;
+  s/^\x{1F916}.*\n//mg;
+  s/\n{3,}/\n\n/g;
+  s/\s+\z/\n/;
+' "$msg"
+after=$(cksum <"$msg")
+[ "$before" = "$after" ] || echo "commit-msg: removed AI attribution."
+exit 0
