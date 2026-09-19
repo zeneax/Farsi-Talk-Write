@@ -98,19 +98,18 @@ enum ProviderError: LocalizedError {
     ///
     /// Still excluded are the failures that genuinely cannot succeed on a retry:
     /// a rejected key, an unknown model, a missing key, a malformed URL.
+    ///
+    /// The policy itself lives in kernel/timing.json under `request.retry`, so
+    /// the web and Telegram consumers can match it rather than reimplement it
+    /// from memory. `KernelDefaults.Retry` is generated from that file.
     var isTransient: Bool {
         switch self {
         case .network:
-            return true
+            return KernelDefaults.Retry.network
         case .http(let status, _, _):
-            switch status {
-            case 401, 403, 404: return false
-            case 400, 429: return true
-            case 500...599: return true
-            default: return true
-            }
+            return KernelDefaults.Retry.allowsRetry(status: status)
         case .malformedResponse:
-            return true
+            return KernelDefaults.Retry.malformedResponse
         case .emptyResponse:
             // Not retryable, because a retry cannot change the answer.
             //
@@ -124,7 +123,7 @@ enum ProviderError: LocalizedError {
             // upstream rate limiting answering 200-with-empty instead of 429 —
             // is real but rare, and the recording is kept in `pending/`, so it
             // costs one click in Recordings rather than a tax on every dictation.
-            return false
+            return KernelDefaults.Retry.emptyResponse
         case .missingAPIKey, .badURL:
             return false
         }

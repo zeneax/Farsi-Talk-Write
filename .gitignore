@@ -35,3 +35,15 @@ pending/
 .vscode/
 .idea/
 *.swp
+
+# npm package (packages/web)
+#
+# The kernel copy and the generated TypeScript are build artifacts, produced by
+# scripts/sync-kernel.mjs on every build, test and pack. They are deliberately
+# NOT committed: a second copy of the kernel in the tree is a copy that can
+# drift from kernel/, which is the one thing this layout exists to prevent.
+node_modules/
+packages/web/dist/
+packages/web/kernel/
+packages/web/src/kernel.generated.ts
+packages/web/*.tgz

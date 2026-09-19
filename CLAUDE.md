@@ -19,10 +19,12 @@ also gives exact control over the bundle layout and signing — both of which ma
 is fussy about here.
 
 ```sh
-make doctor     # verify the toolchain before anything else
-make            # build + bundle + sign
-make install    # → /Applications
-make icon       # regenerate AppIcon.icns from Tools/make-icon.swift
+make doctor       # verify the toolchain before anything else
+make              # regenerate kernel constants + build + bundle + sign
+make install      # → /Applications
+make kernel       # regenerate KernelDefaults.generated.swift from kernel/*.json
+make kernel-test  # run kernel/bidi-cases.json against BidiText
+make icon         # regenerate AppIcon.icns from Tools/make-icon.swift
 make clean
 ```
 
@@ -82,6 +84,41 @@ trigger ─→ DictationController ─→ AudioRecorder ─→ ProviderRegistry 
 
 State lives in `Config`, held by `AppDelegate` and pushed to every component via
 `persist()`. Components never write config directly — they call `onConfigChanged`.
+
+### The kernel
+
+The prompts and every tuned number are **not Swift literals**. They live in
+`kernel/*.json`, and the Swift constants are derived from them:
+
+```
+kernel/prompts.json ─┐
+kernel/timing.json  ─┴─→ Tools/generate-kernel.swift ─→ KernelDefaults.generated.swift
+kernel/bidi-cases.json ──→ run by Tests/BidiCases and by packages/web
+```
+
+`make` runs the generator before compiling, so a stale copy cannot survive a
+build. The generated file is **committed**, in the same spirit as
+`Resources/AppIcon.icns`: a fresh clone builds without running the generator
+first. It rewrites only when the content actually changes, so an untouched
+kernel does not force a full recompile.
+
+Code generation rather than decoding JSON at runtime is deliberate. Defaults stay
+compile-time constants, so there is no new failure mode where a missing or
+malformed resource leaves the app with no prompt — and nothing changes about how
+the bundle is laid out or signed, which this file warns at length is load-bearing.
+
+**Edit the JSON, never `KernelDefaults.generated.swift`.** The second copy of the
+kernel lives in `packages/web`, published to npm as `@mazarix/voice-kernel` for the
+web page and the Telegram bot, and it is generated from the same files. Editing
+the generated Swift desynchronises them silently.
+
+What belongs in the kernel: anything a browser or a Telegram bot could also use.
+A silence threshold can. A key code cannot — `TriggerConfig`, `HUDConfig`,
+`InsertionConfig`, `InputDeviceConfig`, `Permissions`, `HotkeyMonitor`,
+`TextInserter`, `TargetTracker` and all of `UI/` stay in Swift.
+
+`kernel/` and `packages/web` are **MIT**, not GPL-3 like the app. GPL-3 on the npm
+package would force copyleft onto every site that installed it.
 
 ## Hard-won gotchas
 
@@ -194,9 +231,15 @@ built on the assumption they run in parallel; measured against OpenRouter, two p
 of a 27.8s recording took 46s and 98s against ~12s for the whole clip. It is disabled
 by a threshold above `maxSeconds`. Do not re-enable it without measuring first.
 
-**An empty response is not necessarily silence.** A provider under upstream rate
-limiting answers 200 with empty content rather than 429, so `emptyResponse` is
-retryable.
+**An empty response is no longer retried.** A provider under upstream rate limiting
+does answer 200-with-empty rather than 429, which is why this used to be retryable.
+Two things changed it. Silence is now decided locally before anything is sent
+(`Recording.seemsSilent`), so the common case never reaches the provider; and every
+request goes out at temperature 0, so re-sending identical bytes returns an identical
+empty answer — three attempts and two seconds of backoff to reconfirm what the first
+one said. The rate-limiting case is real but rare, and the recording is kept in
+`pending/`, so it costs one click in Recordings rather than a tax on every dictation.
+The policy lives in `kernel/timing.json` under `request.retry`, not in Swift.
 
 ## Providers
 
@@ -278,8 +321,18 @@ FarsiTalkWrite --test-insert "سلام دنیا"
 FarsiTalkWrite --test-hotkey
 ```
 
-There is no test target. `BidiText` is pure and worth exercising by compiling it
-standalone with a small harness — that is how its seven cases were verified.
+`BidiText` has a real suite now: `make kernel-test` runs `kernel/bidi-cases.json`
+through it, and `cd packages/web && npm test` runs the same file through the
+TypeScript port. A case that passes in one and fails in the other is the entire
+reason the fixture is shared rather than duplicated — two ports drift, one fixture
+cannot. Adding a case to the JSON exercises both suites with no edit to either, so
+add cases there rather than to either runner.
+
+Note that `directionallyMarked` is **not idempotent**: it does not strip first, so
+marking already-marked text doubles every mark. `TextInserter` strips before it
+marks, and both suites assert the strip-then-mark round trip for every case.
+
+There is otherwise no test target.
 
 When debugging a live problem, read `farsitalkwrite.log` first. It traces every
 step: trigger fired, device and rate, stop reason, attempt counts, and where the
@@ -309,6 +362,11 @@ grep -rInE 'AIza[0-9A-Za-z_-]{30,}|sk-or-v1-[0-9a-f]{40,}|AQ\.[A-Za-z0-9_-]{20,}
 ```
 
 ## Docs
+
+`kernel/README.md` covers the shared kernel and how a change there reaches both
+the app and the npm package. `packages/web/README.md` is the published package's
+own documentation — it carries the warning that terminals and code editors render
+the bidi marks as literal escapes, which has already bitten a consumer.
 
 `README.md` (English) and `README.fa.md` (Farsi) are parallel and both
 user-facing — update them together when features change. The Farsi one wraps

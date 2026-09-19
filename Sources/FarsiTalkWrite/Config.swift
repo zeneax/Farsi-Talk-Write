@@ -45,21 +45,22 @@ struct ProviderProfile: Codable {
     /// Base request timeout. The effective timeout scales with the length of the
     /// audio being uploaded — a 60-second clip is a 2.4 MB upload, which a flat
     /// 45 seconds could not complete on a slow link, losing the recording.
-    var timeoutSeconds: Double = 60
+    var timeoutSeconds: Double = KernelDefaults.Request.baseTimeoutSeconds
     var note: String?
 
     /// Effective timeout for a given payload: base, plus headroom proportional to
     /// how much audio has to be uploaded and processed.
     func timeout(forAudioBytes bytes: Int) -> Double {
-        let seconds = Double(max(0, bytes - 44)) / (16_000 * 2)
-        return timeoutSeconds + seconds * 3
+        let payload = Double(max(0, bytes - KernelDefaults.Audio.wavHeaderBytes))
+        let seconds = payload / KernelDefaults.Audio.bytesPerSecond
+        return timeoutSeconds + seconds * KernelDefaults.Request.timeoutSecondsPerAudioSecond
     }
     var modelPresets: [String] = []
 
     /// How much the model is allowed to "think" before answering, for providers
     /// that expose it: "low", "medium", "high", or "" to omit the field.
     /// Transcription needs none, and low is measurably faster.
-    var reasoningEffort: String = "low"
+    var reasoningEffort: String = KernelDefaults.Request.reasoningEffort
 }
 
 // MARK: - Trigger
@@ -114,8 +115,8 @@ struct InputDeviceConfig: Codable {
 /// Bluetooth (HFP) links need a moment to negotiate; the first few hundred ms
 /// of a recording is silence or noise. Discarded per transport type.
 struct LeadInConfig: Codable {
-    var defaultMs: Int = 150
-    var bluetoothMs: Int = 350
+    var defaultMs: Int = KernelDefaults.Recording.leadInDefaultMs
+    var bluetoothMs: Int = KernelDefaults.Recording.leadInBluetoothMs
 
     enum CodingKeys: String, CodingKey {
         case defaultMs = "default"
@@ -124,14 +125,14 @@ struct LeadInConfig: Codable {
 }
 
 struct RecordingConfig: Codable {
-    var maxSeconds: Double = 30
+    var maxSeconds: Double = KernelDefaults.Recording.maxSeconds
     /// How long a pause ends a recording. This is dead air the user sits through
     /// after every sentence, before the request is even sent, so it is tuned as
     /// short as it can be without clipping someone who pauses mid-thought.
-    var silenceStopSeconds: Double = 1.4
+    var silenceStopSeconds: Double = KernelDefaults.Recording.silenceStopSeconds
     /// Silence-stop only arms after this much speech, so the pause before you
     /// start talking cannot end the recording immediately.
-    var minSpeechSeconds: Double = 0.8
+    var minSpeechSeconds: Double = KernelDefaults.Recording.minSpeechSeconds
     var inputDevice = InputDeviceConfig()
     var leadInDiscardMs = LeadInConfig()
 
@@ -147,15 +148,15 @@ struct RecordingConfig: Codable {
     /// The timeout problem it was meant to solve is handled properly by
     /// `timeout(forAudioBytes:)` instead. A ceiling above `maxSeconds` leaves the
     /// machinery in place for anyone who needs it without it engaging by default.
-    var chunkTargetSeconds: Double = 60
-    var chunkMaxSeconds: Double = 120
+    var chunkTargetSeconds: Double = KernelDefaults.Chunking.targetSeconds
+    var chunkMaxSeconds: Double = KernelDefaults.Chunking.maxSeconds
     /// Keyed by CoreAudio device UID, plus a "default" entry. AirPods run hotter
     /// and noisier than the built-in mic, so one global threshold does not work.
-    var silenceThresholdDb: [String: Double] = ["default": -45]
+    var silenceThresholdDb: [String: Double] = ["default": KernelDefaults.Recording.silenceThresholdDb]
 
     func silenceThreshold(forDeviceUID uid: String?) -> Double {
         if let uid, let v = silenceThresholdDb[uid] { return v }
-        return silenceThresholdDb["default"] ?? -45
+        return silenceThresholdDb["default"] ?? KernelDefaults.Recording.silenceThresholdDb
     }
 
     func leadInDiscard(isBluetooth: Bool) -> Int {
@@ -312,7 +313,7 @@ struct Config: Codable {
     /// How many times to attempt a transcription before giving up. The audio is
     /// already on disk by this point, so the only cost of trying again is a
     /// fraction of a cent — cheap next to making someone repeat themselves.
-    var retryAttempts: Int = 3
+    var retryAttempts: Int = KernelDefaults.Request.retryAttempts
     var trigger = TriggerConfig()
     var recording = RecordingConfig()
     var insertion = InsertionConfig()
@@ -371,46 +372,11 @@ struct Config: Codable {
 // MARK: - Defaults
 
 extension Config {
-    static let defaultPrompt = """
-    تو یک سیستم رونویسی گفتار فارسی هستی.
-    - فقط متنِ گفته‌شده را بنویس. هیچ توضیح، مقدمه یا پاسخی اضافه نکن.
-    - علائم نگارشی (، . ؟ !) و پاراگراف‌بندی درست را اضافه کن.
-    - کلمات پرکننده («اِاِ»، «یعنی»، «چیز»، تکرارها و لکنت‌ها) را حذف کن.
-    - از «ی» و «ک» فارسی استفاده کن، نه عربیِ ي/ك.
-    - نیم‌فاصله را درست به کار ببر: می‌خواهم، کتاب‌ها، نمی‌شود.
-    - کلمات انگلیسی (مثل PDF، Slack، Claude Code) را به همان خط لاتین بنویس و \
-    دقیقاً در همان جایی بگذار که گفته شده‌اند. آن‌ها را به اول یا آخر جمله منتقل نکن \
-    و به فارسی ترجمه یا آوانویسی نکن.
-    """
-
-    static let defaultEnglishPrompt = """
-    You are a speech transcription system.
-    - Write only what was said. Add no explanation, preamble, or reply.
-    - Add correct punctuation, capitalisation, and paragraph breaks.
-    - Remove filler words ("um", "uh", "you know", "like"), false starts, \
-    stutters, and repeated words.
-    - Keep technical terms, product names, and acronyms in their normal written \
-    form (PDF, GitHub, OAuth, macOS).
-    """
-
-    /// Deliberately instructs the model to follow the speaker rather than pick a
-    /// single output language: someone dictating in Persian who says an English
-    /// sentence should get that sentence in English, not transliterated.
-    static let defaultAutoPrompt = """
-    You are a speech transcription system. Transcribe the audio in the language \
-    it was actually spoken in — do not translate.
-
-    - Write only what was said. Add no explanation, preamble, or reply.
-    - Add correct punctuation and paragraph breaks for that language.
-    - Remove filler words, false starts, stutters, and repetitions.
-    - If the speech is in English, use normal English capitalisation and keep \
-    technical terms in their standard written form (PDF, GitHub, macOS).
-    - اگر گفتار فارسی است: از «ی» و «ک» فارسی استفاده کن (نه ي/ك عربی)، \
-    نیم‌فاصله را درست به کار ببر (می‌خواهم، کتاب‌ها، نمی‌شود)، و علائم نگارشی \
-    فارسی (، ؛ ؟) را رعایت کن.
-    - کلمات انگلیسی داخل جملهٔ فارسی را به همان خط لاتین و دقیقاً در همان جای \
-    گفته‌شده بنویس؛ آن‌ها را ترجمه یا آوانویسی نکن و جابه‌جا نکن.
-    """
+    /// The three prompts come from kernel/prompts.json by way of
+    /// Tools/generate-kernel.swift. Edit the JSON, not these.
+    static let defaultPrompt = KernelDefaults.Prompts.farsi
+    static let defaultEnglishPrompt = KernelDefaults.Prompts.english
+    static let defaultAutoPrompt = KernelDefaults.Prompts.auto
 
     static let geminiAPIRevision = "2026-05-20"
 
@@ -571,7 +537,7 @@ enum ConfigStore {
             c.activeProvider = c.orderedProviderIDs.first ?? "google-free"
         }
         if c.recording.silenceThresholdDb["default"] == nil {
-            c.recording.silenceThresholdDb["default"] = -45
+            c.recording.silenceThresholdDb["default"] = KernelDefaults.Recording.silenceThresholdDb
         }
         // Configs written before multi-language support have no English/auto
         // prompt; seed them rather than sending an empty instruction.

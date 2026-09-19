@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "note": "Every tuned number that is not macOS-specific. The test of whether something belongs here: could a browser or a Telegram bot use it? A keycode cannot. A silence threshold can. Keycodes, tap windows, HUD timings and insertion behaviour stay in Swift.",
+
+  "recording": {
+    "maxSeconds": 30,
+    "silenceStopSeconds": 1.4,
+    "minSpeechSeconds": 0.8,
+
+    "silenceThresholdDb": {
+      "default": -45
+    },
+
+    "leadInDiscardMs": {
+      "default": 150,
+      "bluetooth": 350
+    },
+
+    "silenceGate": {
+      "peakDb": -30,
+      "meanDb": -45
+    },
+
+    "notes": {
+      "silenceStopSeconds": "How long a pause ends a recording. This is dead air the user sits through after every sentence, before the request is even sent, so it is tuned as short as it can be without clipping someone who pauses mid-thought.",
+      "minSpeechSeconds": "Silence-stop arms only after this much speech has been heard, so the pause before you start talking cannot end the recording immediately.",
+      "silenceThresholdDb": "Per device, not global. Keyed by capture-device identifier with a required 'default' entry. AirPods run hotter and noisier than a built-in mic, so one global threshold does not work. A consumer with no device identity uses 'default'.",
+      "leadInDiscardMs": "Discarded per transport. A Bluetooth (HFP) link needs roughly 350ms to negotiate versus roughly 150ms wired; without discarding it the first syllable is noise.",
+      "silenceGate": "Silence is decided locally, before anything is uploaded: a clip counts as silent when peak is below peakDb AND mean is below meanDb. This used to be left to the model, which answered 200-with-empty and cost a retry round trip to reconfirm. Deciding here is instant and free."
+    }
+  },
+
+  "chunking": {
+    "targetSeconds": 60,
+    "maxSeconds": 120,
+    "enabled": false,
+    "notes": {
+      "enabled": "Deliberately off. targetSeconds (60) sits above recording.maxSeconds (30) so it never engages. Chunking was built, measured against OpenRouter, and disabled: concurrent requests on one API key are queued upstream, so two chunks of a 27.8s clip took 46s and 98s where the whole clip takes about 12s. Splitting also repeats the full prompt per chunk and costs cross-sentence context for punctuation. Do not 'fix' this by lowering targetSeconds. The timeout problem it was meant to solve is handled by request.timeoutSecondsPerAudioSecond instead."
+    }
+  },
+
+  "request": {
+    "baseTimeoutSeconds": 60,
+    "timeoutSecondsPerAudioSecond": 3,
+    "retryAttempts": 3,
+    "reasoningEffort": "low",
+    "notes": {
+      "timeout": "The timeout scales with payload: effective = baseTimeoutSeconds + ((bytes - audio.wavHeaderBytes) / (audio.sampleRate * audio.bitsPerSample / 8)) * timeoutSecondsPerAudioSecond. A flat timeout cannot upload a 2.4 MB clip on a slow link, so the longer you spoke the more likely you were to lose it — exactly backwards.",
+      "retryAttempts": "The audio is already on disk by this point, so the only cost of trying again is a fraction of a cent — cheap next to making someone repeat themselves.",
+      "reasoningEffort": "Gemini 3.x refuses to have reasoning disabled entirely ('Reasoning is mandatory for this endpoint'), so 'low' rather than off — measured 5.5s against 8.1s. A provider that rejects the field should be retried once without it. Empty string means omit the field."
+    },
+
+    "retry": {
+      "retryable": {
+        "httpStatus": [400, 429],
+        "httpStatusRanges": [[500, 599]],
+        "network": true,
+        "malformedResponse": true,
+        "unknownHttpStatus": true
+      },
+      "notRetryable": {
+        "httpStatus": [401, 403, 404],
+        "emptyResponse": true,
+        "missingApiKey": true,
+        "badUrl": true
+      },
+      "notes": {
+        "400": "Included deliberately. In principle a bad request never fixes itself, but in practice providers return 400 for temporary server-side conditions too — this app hit exactly that with 'Reasoning is mandatory for this endpoint'. A retry costs a fraction of a cent; the alternative is discarding something the user already said out loud.",
+        "401/403/404": "A rejected key cannot change its mind, and an unknown model will not appear. These are the failures that genuinely cannot succeed on a retry.",
+        "emptyResponse": "Not retryable. Every request goes out at temperature 0, so re-sending identical bytes returns an identical empty response — three attempts and two seconds of backoff to reconfirm what the first one said. Silence is now decided locally (recording.silenceGate) so it no longer reaches here. A provider under upstream rate limiting answering 200-with-empty instead of 429 is real but rare, and the recording is kept, so it costs one retry by hand rather than a tax on every dictation.",
+        "unknownHttpStatus": "Anything not listed is treated as retryable — an unfamiliar status is more likely transient than permanent."
+      }
+    }
+  },
+
+  "audio": {
+    "sampleRate": 16000,
+    "channels": 1,
+    "bitsPerSample": 16,
+    "wavHeaderBytes": 44,
+    "notes": {
+      "sampleRate": "16 kHz mono PCM16 is what every provider here wants and is the smallest encoding that loses nothing for speech. Never cache the capture device's own rate — AirPods present 16/24 kHz where a built-in mic presents 48 kHz, and a cached rate produces chipmunked or slowed audio. Resample to this target from whatever the device actually gives you.",
+      "wavHeaderBytes": "A minimal RIFF/WAVE header is 44 bytes; subtract it to get the audio payload size when sizing a timeout."
+    }
+  }
+}

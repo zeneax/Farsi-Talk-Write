@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "note": "Shared fixture for the direction algorithm, run by BOTH implementations — the Swift one in this repo and the TypeScript port in packages/web. A case that passes in one and fails in the other is the entire reason this file exists. Adding a case here must make both suites exercise it with no edit to either. directionallyMarked does NOT strip first and is NOT idempotent — marking already-marked text doubles every mark. Callers must strip before marking; the Swift app does this in TextInserter. The round-trip invariant below is that pipeline, and both suites assert it for every case.",
+  "marks": {
+    "RLM": "‏",
+    "FSI": "⁨",
+    "PDI": "⁩"
+  },
+  "invariants": [
+    "For every case: directionallyMarked(stripping(expected)) === expected. This is the real pipeline — strip, then mark — and it proves marks never accumulate across round trips. Both suites assert it for every case automatically.",
+    "directionallyMarked is not idempotent on its own. Marking text that already carries marks doubles them. Strip first, always.",
+    "Pure Persian with no Latin gets the RLM and the terminator only. Pure English gets nothing at all. No marks are added where they earn nothing."
+  ],
+  "cases": [
+    {
+      "name": "pure-persian-no-terminator",
+      "input": "سلام دنیا",
+      "expected": "‏سلام دنیا",
+      "why": "RTL with no Latin earns the base-direction mark only. Nothing is isolated because there is nothing to isolate, and the last character is a letter, so no terminator is appended."
+    },
+    {
+      "name": "pure-persian-full-stop",
+      "input": "این یک جملهٔ کامل است.",
+      "expected": "‏این یک جملهٔ کامل است.‏",
+      "why": "A sentence-final full stop is a neutral character with no following strong neighbour, so it falls back to paragraph direction and renders at the wrong end. The trailing RLM gives it one."
+    },
+    {
+      "name": "pure-persian-question-mark",
+      "input": "حالت چطور است؟",
+      "expected": "‏حالت چطور است؟‏",
+      "why": "Same as the full stop, for the Persian question mark. A Persian reader sees a misplaced ؟ as the start of the line."
+    },
+    {
+      "name": "pure-persian-guillemet",
+      "input": "او گفت «سلام»",
+      "expected": "‏او گفت «سلام»‏",
+      "why": "» is in the terminator set. The guillemets themselves are neither RTL nor Latin, so no isolate is opened around them."
+    },
+    {
+      "name": "pure-english-unchanged",
+      "input": "Hello world.",
+      "expected": "Hello world.",
+      "why": "No RTL anywhere, so the whole function is a no-op. Pure English gets no marks at all."
+    },
+    {
+      "name": "pure-english-no-punctuation-unchanged",
+      "input": "Open the file",
+      "expected": "Open the file",
+      "why": "Same: no RTL, nothing to fix, nothing added."
+    },
+    {
+      "name": "empty-string-unchanged",
+      "input": "",
+      "expected": "",
+      "why": "No RTL, so returned untouched."
+    },
+    {
+      "name": "persian-with-one-latin-word",
+      "input": "می‌خواهم این PDF را باز کنم",
+      "expected": "‏می‌خواهم این ⁨PDF⁩ را باز کنم",
+      "why": "The canonical case. Without the isolate the bidi algorithm flings PDF to the visual start or end of the line, changing what the sentence appears to say."
+    },
+    {
+      "name": "latin-multi-word-run-stays-one-unit",
+      "input": "من از Claude Code استفاده می‌کنم.",
+      "expected": "‏من از ⁨Claude Code⁩ استفاده می‌کنم.‏",
+      "why": "The space between two Latin words is kept inside the run because a Latin character follows it, so a product name is isolated as one unit rather than two that can be reordered against each other."
+    },
+    {
+      "name": "version-number",
+      "input": "نسخهٔ Xcode 16.2 را نصب کن.",
+      "expected": "‏نسخهٔ ⁨Xcode 16.2⁩ را نصب کن.‏",
+      "why": "Digits extend a run, and '.' is a connector kept because a digit follows it. 16.2 must not split into 16 and 2 with a neutral between them."
+    },
+    {
+      "name": "latin-run-then-sentence-final-stop",
+      "input": "آن را باز کن با Preview.",
+      "expected": "‏آن را باز کن با ⁨Preview⁩.‏",
+      "why": "The decisive connector case. '.' is a connector, but nothing Latin follows it, so the run ends before it. Swallowing the full stop into the isolate would place it at the wrong end of the line."
+    },
+    {
+      "name": "latin-run-at-start-of-persian-line",
+      "input": "PDF را باز کن.",
+      "expected": "‏⁨PDF⁩ را باز کن.‏",
+      "why": "Without the leading RLM a line that opens with a Latin word is resolved left-to-right in its entirety."
+    },
+    {
+      "name": "accented-latin-and-dotted-name",
+      "input": "من از Node.js و café استفاده می‌کنم.",
+      "expected": "‏من از ⁨Node.js⁩ و ⁨café⁩ استفاده می‌کنم.‏",
+      "why": "é is inside the 0xC0–0x24F accented-Latin range, so it is a Latin letter here. Node.js keeps its dot because 'j' follows it. Two separate runs, each isolated."
+    },
+    {
+      "name": "connector-not-followed-by-latin-ends-the-run",
+      "input": "آدرس: https://example.com",
+      "expected": "‏آدرس: ⁨https⁩://⁨example.com⁩",
+      "why": "Pins the connector rule exactly: ':' is a connector but '/' is neither a Latin letter nor a digit, so the run ends at 'https'. The '//' stays outside any isolate. Ugly but correct, and a port that 'improves' it has diverged."
+    },
+    {
+      "name": "multi-line-marked-per-line",
+      "input": "سلام PDF\nخداحافظ.",
+      "expected": "‏سلام ⁨PDF⁩\n‏خداحافظ.‏",
+      "why": "The bidi algorithm resolves per paragraph, so one mark at the top would not govern the lines below it. Each line is marked independently. Line one ends in PDI, which is not a terminator, so it gets no trailing RLM."
+    },
+    {
+      "name": "multi-line-latin-only-line-untouched",
+      "input": "Hello world\nسلام.",
+      "expected": "Hello world\n‏سلام.‏",
+      "why": "A line with no RTL in it is returned as-is even when another line in the same block has RTL. Per-line, not per-string."
+    }
+  ],
+  "strippingCases": [
+    {
+      "name": "strips-all-three-marks",
+      "input": "‏من از ⁨Claude Code⁩ استفاده می‌کنم.‏",
+      "expected": "من از Claude Code استفاده می‌کنم.",
+      "why": "RLM, FSI and PDI all come out, leaving the logical text a terminal or code editor can show without literal escapes."
+    },
+    {
+      "name": "unmarked-text-unchanged",
+      "input": "می‌خواهم این PDF را باز کنم",
+      "expected": "می‌خواهم این PDF را باز کنم",
+      "why": "Stripping is safe to call on anything."
+    },
+    {
+      "name": "strips-marks-across-lines",
+      "input": "‏سلام ⁨PDF⁩\n‏خداحافظ.‏",
+      "expected": "سلام PDF\nخداحافظ.",
+      "why": "Stripping is a plain replacement over the whole string, lines included."
+    },
+    {
+      "name": "strips-doubled-marks",
+      "input": "‏‏من از ⁨⁨Claude Code⁩⁩ استفاده می‌کنم.‏",
+      "expected": "من از Claude Code استفاده می‌کنم.",
+      "why": "What text looks like when someone marked it twice without stripping. Stripping removes every occurrence, so the damage is recoverable — which is why the pipeline is strip-then-mark rather than a guard inside marking."
+    }
+  ]
+}

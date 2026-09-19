@@ -1,0 +1,61 @@
+{
+  "name": "@mazarix/voice-kernel",
+  "version": "0.1.0",
+  "description": "The shared kernel behind FarsiTalkWrite: Persian/English transcription prompts, tuned recording and retry constants, and the bidi isolation algorithm that keeps embedded Latin words where they were spoken.",
+  "license": "MIT",
+  "author": "Zeneax Lab by Shahram Mazar",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zeneax/Farsi-Talk-Write.git",
+    "directory": "packages/web"
+  },
+  "homepage": "https://github.com/zeneax/Farsi-Talk-Write/tree/main/packages/web#readme",
+  "bugs": {
+    "url": "https://github.com/zeneax/Farsi-Talk-Write/issues"
+  },
+  "keywords": [
+    "farsi",
+    "persian",
+    "rtl",
+    "bidi",
+    "transcription",
+    "speech-to-text",
+    "unicode"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./bidi": {
+      "types": "./dist/bidi.d.ts",
+      "default": "./dist/bidi.js"
+    },
+    "./prompts.json": "./kernel/prompts.json",
+    "./timing.json": "./kernel/timing.json",
+    "./bidi-cases.json": "./kernel/bidi-cases.json"
+  },
+  "files": [
+    "dist",
+    "kernel",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "sync": "node scripts/sync-kernel.mjs",
+    "build": "npm run sync && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"test/**/*.test.js\"",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
