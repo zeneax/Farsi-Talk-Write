@@ -93,6 +93,46 @@ specific input device the node briefly reports a *stale* format, and handing tha
 to `installTap` crashes the app. Pass `format: nil` and build the `AVAudioConverter`
 lazily from the first buffer's own format.
 
+**Opening the microphone is a Mach round trip, and it can take seconds.** Not a
+figure of speech: a hang report showed all 25 samples of a 7.6-second freeze
+parked inside `AVAudioEngine.inputNode`, waiting on `mach_msg2_trap` while
+CoreAudio enumerated devices. A second report two hours later said 9.3s.
+`engine.inputNode`, `AudioUnitSetProperty` for the device, `engine.start()`,
+`engine.stop()` and `AudioObjectGetPropertyData` are all synchronous IPC to
+`coreaudiod`, which answers when it is ready. Called from the trigger handler, as
+they were, the whole app freezes and macOS beachballs. Nothing in the app is
+wrong when this happens — the audio server is slow, and the UI thread is the one
+waiting.
+
+So `AudioRecorder` does every CoreAudio call on its own serial `engineQueue` and
+calls back on main; `start(config:completion:)` returns immediately. The queue is
+serial for a second reason: it is what guarantees one engine is torn down before
+the next is built. Keep new CoreAudio calls on it.
+
+**The app no longer freezes, but a slow open is still a late recording** — the
+cue comes nine seconds after the keypress and everything said before it is gone.
+So every start logs what the open cost, and says so plainly past two seconds:
+
+```sh
+grep "device opened in" ~/.config/farsitalkwrite/farsitalkwrite.log | tail -20
+grep "CoreAudio was slow" ~/.config/farsitalkwrite/farsitalkwrite.log
+```
+
+Healthy is well under a second — measured 0.3–0.6s on the built-in mic. If the
+slow opens cluster rather than scatter, the machine's audio stack is the thing to
+look at, not this code.
+
+In a log written before that line existed, the tell is a trigger with no device
+line after it:
+
+```sh
+grep -A1 "Dictation target" ~/.config/farsitalkwrite/farsitalkwrite.log | tail -4
+```
+
+Every "Dictation target: X" is followed by "Recording from ..." within a second.
+A pair minutes apart, or a target line followed by a fresh launch banner, is a
+freeze between the two — the app never got past opening the device.
+
 **Opening the mic on Bluetooth fires a configuration-change notification
 immediately.** Switching the link into HFP voice mode *is* an audio configuration
 change. Treating it as "the device disconnected" aborted every AirPods recording at
