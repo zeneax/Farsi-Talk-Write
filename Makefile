@@ -14,6 +14,14 @@ RES_DIR     := $(APP_BUNDLE)/Contents/Resources
 BINARY      := $(MACOS_DIR)/$(APP_NAME)
 INSTALL_DIR := /Applications
 
+# The kernel is the single source of truth for the prompts and the tuned
+# numbers, shared verbatim with the npm package in packages/web. A generator
+# turns it into Swift constants at build time — see `kernel` below.
+KERNEL_DIR  := kernel
+KERNEL_JSON := $(wildcard $(KERNEL_DIR)/*.json)
+KERNEL_GEN  := Sources/FarsiTalkWrite/KernelDefaults.generated.swift
+KERNEL_TOOL := Tools/generate-kernel.swift
+
 SOURCES     := $(shell find Sources -name '*.swift')
 SDK         := $(shell xcrun --show-sdk-path)
 TARGET      := arm64-apple-macos14.0
@@ -59,7 +67,8 @@ UNIVERSAL_DIR     := $(BUILD_DIR)/universal
 UNIVERSAL_APP     := $(UNIVERSAL_DIR)/$(APP_NAME).app
 UNIVERSAL_DEPLOY  := 12.0
 
-.PHONY: all build bundle sign install clean run check doctor icon signing-cert universal
+.PHONY: all build bundle sign install clean run check doctor icon signing-cert universal \
+        kernel kernel-test
 
 # `signing-cert` is the first rule below, which would otherwise make it the
 # default goal — a bare `make` would mint a certificate instead of building.
@@ -104,9 +113,38 @@ icon:
 	@iconutil -c icns /tmp/ftw-icon/AppIcon.iconset -o Resources/AppIcon.icns
 	@echo "Regenerated Resources/AppIcon.icns"
 
+# ---------------------------------------------------------------------------
+# kernel/ -> generated Swift constants.
+#
+# The prompts and every tuned number live in kernel/*.json, which the npm package
+# in packages/web ships verbatim. Generating compile-time constants rather than
+# decoding the JSON at runtime keeps the defaults infallible (no missing-resource
+# failure mode where the app launches with no prompt) and changes nothing about
+# how the bundle is laid out or signed — both of which TCC is sensitive to.
+#
+# Wired into `build` so it cannot go stale: a change in kernel/ regenerates
+# before anything is compiled. The generated file is committed, in the same
+# spirit as Resources/AppIcon.icns, so a fresh clone builds without running the
+# generator first. It rewrites only when the content actually changes, so an
+# untouched kernel does not force a full recompile.
+kernel: $(KERNEL_GEN)
+
+$(KERNEL_GEN): $(KERNEL_JSON) $(KERNEL_TOOL)
+	@swift $(KERNEL_TOOL) $(KERNEL_DIR) $@
+
+# Runs kernel/bidi-cases.json against this repo's BidiText. The same fixture is
+# run by the TypeScript port in packages/web; a case that passes in one and fails
+# in the other is the whole reason the file is shared.
+kernel-test:
+	@mkdir -p $(BUILD_DIR)
+	@swiftc -O -sdk $(SDK) -target $(TARGET) \
+		Sources/FarsiTalkWrite/BidiText.swift Tests/BidiCases/main.swift \
+		-o $(BUILD_DIR)/bidi-cases 2>&1 | sed 's/^/  /'
+	@$(BUILD_DIR)/bidi-cases $(KERNEL_DIR)/bidi-cases.json
+
 build: $(BUILD_DIR)/$(APP_NAME)-bin
 
-$(BUILD_DIR)/$(APP_NAME)-bin: $(SOURCES)
+$(BUILD_DIR)/$(APP_NAME)-bin: $(KERNEL_GEN) $(SOURCES)
 	@mkdir -p $(BUILD_DIR)
 	swiftc $(SWIFTC_FLAGS) $(SOURCES) -o $@
 
@@ -173,7 +211,7 @@ doctor:
 
 # Builds one .app containing both architectures. macOS selects the matching slice
 # at launch — the user never chooses, and there is only ever one download.
-universal:
+universal: $(KERNEL_GEN)
 	@rm -rf $(UNIVERSAL_DIR)
 	@mkdir -p $(UNIVERSAL_DIR)/slices
 	@echo "Compiling arm64 slice (macOS $(UNIVERSAL_DEPLOY)+)…"

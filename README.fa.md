@@ -352,6 +352,68 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
 
 ---
 
+## هستهٔ مشترک
+
+پرامپت‌ها، عددهای تنظیم‌شده، و رفتار مورد انتظار الگوریتم جهت‌دهی دیگر ثابت‌های
+Swift نیستند. این‌ها در [`kernel/`](kernel/) زندگی می‌کنند و **همان پوشه یگانه
+مرجع حقیقت است** — مقدارهای Swift از روی آن ساخته می‌شوند، نه برعکس.
+
+<div dir="ltr">
+
+```
+kernel/
+├── prompts.json      the three transcription prompts, with the intent behind each
+├── timing.json       every tuned number that is not macOS-specific, plus the retry policy
+└── bidi-cases.json   input/expected pairs for the direction algorithm
+```
+
+</div>
+
+دلیلش این است که همین قابلیت قرار است به جاهای دیگری هم برود — یک صفحهٔ وب و یک
+ربات تلگرام — و Swift روی Vercel اجرا نمی‌شود. آن بخشی که می‌شود به اشتراک گذاشت
+کوچک است و بیشترش داده است، پس به شکل داده به اشتراک گذاشته شده. این پوشه به‌جای
+رفتن به مخزنی جداگانه، در همین مخزن می‌ماند: برنامهٔ مک و بستهٔ npm دو مصرف‌کنندهٔ
+یک پوشه‌اند، در یک کامیت و یک نسخه.
+
+### یک تغییر چطور به هر دو مصرف‌کننده می‌رسد
+
+فقط JSON را ویرایش کنید. همین. هر دو نسخه تولید می‌شوند و هیچ‌کدام دستی نگه‌داری
+نمی‌شوند.
+
+| مصرف‌کننده | تولیدکننده | چه زمانی |
+|---|---|---|
+| برنامهٔ مک | `Tools/generate-kernel.swift` ← `Sources/FarsiTalkWrite/KernelDefaults.generated.swift` | هر `make` |
+| [`@mazarix/voice-kernel`](packages/web) | `packages/web/scripts/sync-kernel.mjs` ← تایپ‌اسکریپت تایپ‌دار به‌همراه یک کپی از JSON | هر build و test و `npm pack` |
+
+<div dir="ltr">
+
+```sh
+make kernel                      # regenerate the Swift constants only
+make kernel-test                 # run kernel/bidi-cases.json against Swift BidiText
+cd packages/web && npm test      # run the same cases against the TypeScript port
+```
+
+</div>
+
+فایل `bidi-cases.json` عمداً توسط **هر دو** پیاده‌سازی اجرا می‌شود. حالتی که در
+یکی قبول شود و در دیگری رد، دقیقاً همان دلیلی است که این فایل مشترک است و نه دو
+مجموعه آزمون جدا که از هم فاصله می‌گیرند.
+
+چه چیزی بیرون از هسته می‌ماند: هر چیزی که یک مرورگر یا ربات تلگرام نمی‌تواند از آن
+استفاده کند. کدهای کلید، پنجرهٔ ضربه‌ها، زمان‌بندی HUD، رفتار درج و مجوزها مخصوص
+مک هستند و در Swift می‌مانند.
+
+### بستهٔ npm
+
+پوشهٔ [`packages/web`](packages/web) با نام **`@mazarix/voice-kernel`** منتشر
+می‌شود — دادهٔ هسته به‌همراه ترجمهٔ `BidiText` به تایپ‌اسکریپت، برای صفحهٔ وب و ربات
+تلگرام.
+
+این بسته عمداً برخلاف خودِ برنامه با مجوز **MIT** منتشر می‌شود. یادداشت بخش مجوز را
+در ادامه ببینید.
+
+---
+
 ## مجوز
 
 **GNU General Public License v3.0** — حق نشر © ۲۰۲۶ Zeneax Lab by Shahram Mazar
@@ -359,5 +421,16 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
 شما آزادید این نرم‌افزار را استفاده، مطالعه، تغییر و بازتوزیع کنید. اگر نسخهٔ
 تغییریافته‌ای منتشر کنید، باید کد منبع آن را هم تحت همین مجوز GPL منتشر کنید.
 انتشار نسخه‌های بسته و انحصاری مجاز نیست. [LICENSE](LICENSE) را ببینید.
+
+### هسته MIT است، نه GPL
+
+پوشهٔ [`kernel/`](kernel/) و بستهٔ npm در [`packages/web`](packages/web) با مجوز
+**MIT** منتشر می‌شوند — [kernel/LICENSE](kernel/LICENSE) و
+[packages/web/LICENSE](packages/web/LICENSE) را ببینید.
+
+مجوز GPL-3 کپی‌لفت است، یعنی هر سایت یا رباتی که `@mazarix/voice-kernel` را نصب
+کند خودش هم باید GPL-3 و با کد منبع باز باشد. پرامپت‌ها و ثابت‌های مشترک قرار است
+از هر جایی قابل استفاده باشند، پس مجوز آزادتر را می‌گیرند. خودِ برنامه GPL-3
+می‌ماند.
 
 </div>

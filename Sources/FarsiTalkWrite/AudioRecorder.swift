@@ -74,7 +74,10 @@ final class AudioRecorder {
         /// empty room is about -32 dB peak / -50 dB mean, actual speech about
         /// -0 / -20. Both conditions must hold, so one loud noise in an otherwise
         /// silent room still counts as something worth sending.
-        var seemsSilent: Bool { peakDb < -30 && meanDb < -45 }
+        var seemsSilent: Bool {
+            peakDb < Float(KernelDefaults.Recording.silenceGatePeakDb)
+                && meanDb < Float(KernelDefaults.Recording.silenceGateMeanDb)
+        }
     }
 
     enum RecorderError: LocalizedError {
@@ -97,7 +100,7 @@ final class AudioRecorder {
         }
     }
 
-    static let targetSampleRate: Double = 16_000
+    static let targetSampleRate: Double = KernelDefaults.Audio.sampleRate
 
     // Callbacks are delivered on the main queue.
     var onLevel: ((Float) -> Void)?          // current level in dBFS
@@ -273,7 +276,7 @@ final class AudioRecorder {
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: Self.targetSampleRate,
-            channels: 1,
+            channels: AVAudioChannelCount(KernelDefaults.Audio.channels),
             interleaved: true
         ) else {
             throw RecorderError.formatUnavailable
@@ -414,8 +417,13 @@ final class AudioRecorder {
         }
 
         let samples = pcmQueue.sync { pcm }
-        let duration = Double(samples.count / 2) / Self.targetSampleRate
-        let wav = Self.wavData(fromPCM16: samples, sampleRate: Self.targetSampleRate, channels: 1)
+        let duration = Double(samples.count / (KernelDefaults.Audio.bitsPerSample / 8))
+            / Self.targetSampleRate
+        let wav = Self.wavData(
+            fromPCM16: samples,
+            sampleRate: Self.targetSampleRate,
+            channels: KernelDefaults.Audio.channels
+        )
 
         let peakDb = Self.dB(peakAmplitude)
         let meanDb = Self.dBFS(sumOfSquares: sumOfSquares, frameCount: framesAnalysed)
