@@ -1,9 +1,12 @@
 {
   "name": "@mazarix/voice-kernel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The shared kernel behind FarsiTalkWrite: Persian/English transcription prompts, tuned recording and retry constants, and the bidi isolation algorithm that keeps embedded Latin words where they were spoken.",
   "license": "MIT",
-  "author": "Zeneax Lab by Shahram Mazar",
+  "author": {
+    "name": "Zeneax Lab by Shahram Mazar",
+    "url": "https://mazarix.com"
+  },
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -14,7 +17,7 @@
     "url": "git+https://github.com/zeneax/Farsi-Talk-Write.git",
     "directory": "packages/web"
   },
-  "homepage": "https://github.com/zeneax/Farsi-Talk-Write/tree/main/packages/web#readme",
+  "homepage": "https://mazarix.com",
   "bugs": {
     "url": "https://github.com/zeneax/Farsi-Talk-Write/issues"
   },
