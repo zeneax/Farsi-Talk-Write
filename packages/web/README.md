@@ -1,5 +1,8 @@
 # @mazarix/voice-kernel
 
+Built and maintained by **[Mazarix](https://mazarix.com)** — Zeneax Lab by Shahram
+Mazar.
+
 The shared kernel behind [FarsiTalkWrite](https://github.com/zeneax/Farsi-Talk-Write),
 a macOS push-to-talk Persian dictation app: the transcription prompts, the tuned
 recording and retry constants, and the bidi isolation algorithm that keeps
