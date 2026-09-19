@@ -152,12 +152,25 @@ final class DictationController {
         }
 
         tracker.capture()
-        do {
-            try recorder.start(config: config)
-            state = .recording(elapsed: 0, level: -120)
-            Cue.play(Cue.start, enabled: config.hud.playsSoundCues)
-        } catch {
-            fail(error.localizedDescription)
+
+        // The HUD comes up now rather than when the audio server answers. Opening
+        // the input device is a round trip to `coreaudiod` that usually takes
+        // milliseconds and occasionally takes seconds, and a trigger that shows
+        // nothing until it returns reads as a dropped keypress.
+        state = .recording(elapsed: 0, level: -120)
+
+        // The cue still waits for capture to be real: it is the signal to start
+        // speaking, and the lead-in before it is deliberately discarded.
+        recorder.start(config: config) { [weak self] result in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    Cue.play(Cue.start, enabled: self.config.hud.playsSoundCues)
+                case .failure(let error):
+                    self.fail(error.localizedDescription)
+                }
+            }
         }
     }
 

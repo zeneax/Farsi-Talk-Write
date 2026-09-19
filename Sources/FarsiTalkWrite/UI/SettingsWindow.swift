@@ -718,16 +718,19 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
     }
 
     private func startMeter() {
+        var meterConfig = config
+        meterConfig.recording.maxSeconds = 600 // effectively no cap while calibrating
+        meterConfig.recording.silenceStopSeconds = .greatestFiniteMagnitude
+
         let recorder = AudioRecorder()
         recorder.onLevel = { [weak self] level in self?.meterView.level = level }
-        do {
-            var meterConfig = config
-            meterConfig.recording.maxSeconds = 600 // effectively no cap while calibrating
-            meterConfig.recording.silenceStopSeconds = .greatestFiniteMagnitude
-            try recorder.start(config: meterConfig)
-            meterRecorder = recorder
-        } catch {
-            report(error.localizedDescription, good: false)
+        // Held from the outset: the meter can be switched off again before the
+        // device has finished opening, and stopMeter() needs something to stop.
+        meterRecorder = recorder
+        recorder.start(config: meterConfig) { [weak self] result in
+            guard let self, case .failure(let error) = result else { return }
+            self.meterRecorder = nil
+            self.report(error.localizedDescription, good: false)
         }
     }
 

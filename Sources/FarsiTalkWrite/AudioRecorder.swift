@@ -105,7 +105,37 @@ final class AudioRecorder {
     var onFinished: ((Recording) -> Void)?
 
     private(set) var isRecording = false
-    private(set) var currentDevice: AudioInputDevice?
+
+    /// Guards the two pieces of state that genuinely cross threads: the capture
+    /// flag, which the audio thread reads on every buffer, and the resolved
+    /// device, which the engine queue writes and the main thread reads.
+    ///
+    /// A lock is affordable on the tap's path because that path is already far
+    /// from lock-free — it allocates an `AVAudioPCMBuffer` and a `Data` per
+    /// buffer, and each of those costs more than an uncontended `NSLock`.
+    ///
+    /// `isStarting` and `startWasCancelled` are deliberately *not* here. Both are
+    /// touched only on the main thread, which the asserts in `start` and `stop`
+    /// state outright; putting them under a lock would suggest a sharing that
+    /// does not exist.
+    private let stateLock = NSLock()
+
+    /// An open slower than this is worth saying out loud in the log.
+    private static let slowOpenSeconds: TimeInterval = 2
+
+    private var _currentDevice: AudioInputDevice?
+    /// The device the current recording is bound to.
+    var currentDevice: AudioInputDevice? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _currentDevice
+    }
+
+    private func setCurrentDevice(_ device: AudioInputDevice?) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        _currentDevice = device
+    }
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
@@ -120,6 +150,35 @@ final class AudioRecorder {
     private var startedAt: Date?
     private var tickTimer: Timer?
     private var configObserver: NSObjectProtocol?
+
+    /// Every CoreAudio call the engine makes runs here, never on the caller's
+    /// thread. Serial on purpose: it is also what guarantees one engine is fully
+    /// torn down before the next one is built.
+    private let engineQueue = DispatchQueue(
+        label: "com.shahram.farsitalkwrite.engine", qos: .userInitiated
+    )
+    /// The engine is being brought up on `engineQueue` and is not capturing yet.
+    private var isStarting = false
+    /// `stop()` arrived during that bring-up; discard the engine when it lands.
+    private var startWasCancelled = false
+    /// The tap is live. Distinct from `isRecording`, which only turns true once
+    /// the main thread has been told, and false the instant a stop is asked for —
+    /// this one is what keeps buffers from an engine being torn down out of the
+    /// next recording. Guarded by `stateLock`, because the audio thread reads it
+    /// on every buffer while main and the engine queue both write it.
+    private var _isCapturing = false
+    private var isCapturing: Bool {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _isCapturing
+        }
+        set {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            _isCapturing = newValue
+        }
+    }
 
     // Silence detection state
     private var silenceThresholdDb: Double = -45
@@ -147,35 +206,69 @@ final class AudioRecorder {
 
     // MARK: - Start
 
-    func start(config: Config) throws {
-        guard !isRecording else { return }
+    /// Begins recording. Returns at once; `completion` runs on the main queue
+    /// when the engine is really capturing, or when it has failed.
+    ///
+    /// That it does not block is the whole point. Bringing an AVAudioEngine up is
+    /// not local work: `engine.inputNode` instantiates the AUHAL, binding a device
+    /// sets a property on it, and `start()` opens the stream — each one a
+    /// synchronous Mach round trip to `coreaudiod`, answered when that daemon is
+    /// ready and not before. Run from the trigger handler on the main thread, as
+    /// this used to be, a slow answer is a frozen app: a 7.6-second hang report,
+    /// every sample of it parked inside `AVAudioEngine.inputNode` waiting on
+    /// `mach_msg2_trap`, is what prompted this shape. Nothing here was wrong —
+    /// the audio server was slow and the UI thread was the one waiting.
+    ///
+    /// `completion` is not called if `stop()` lands before the engine came up. The
+    /// abandoned engine tears itself down and `onFinished` reports the empty
+    /// recording, which is what the caller asked for when it stopped.
+    func start(config: Config, completion: ((Result<AudioInputDevice, Error>) -> Void)? = nil) {
+        assert(Thread.isMainThread, "start() drives isStarting, which is main-thread-only state")
+        guard !isRecording, !isStarting else { return }
+        isStarting = true
+        startWasCancelled = false
 
-        guard let device = AudioDeviceManager.resolveInputDevice(config.recording.inputDevice) else {
-            throw RecorderError.noInputDevice
-        }
-        currentDevice = device
-
-        let recording = config.recording
-        silenceThresholdDb = recording.silenceThreshold(forDeviceUID: device.uid)
-        silenceStopSeconds = recording.silenceStopSeconds
-        minSpeechSeconds = recording.minSpeechSeconds
-        maxSeconds = recording.maxSeconds
+        // Reset everything the tap accumulates here, before any of it can be
+        // running, so a start that is abandoned cannot hand back the previous
+        // recording's audio.
         speechSecondsSeen = 0
         silentSecondsSeen = 0
         sumOfSquares = 0
         framesAnalysed = 0
         peakAmplitude = 0
         reconfigureCount = 0
-        leadInDefaultMs = recording.leadInDiscardMs.defaultMs
-        leadInBluetoothMs = recording.leadInDiscardMs.bluetoothMs
+        setCurrentDevice(nil)
+        pcmQueue.sync { pcm = Data() }
 
-        let engine = AVAudioEngine()
-        self.engine = engine
+        let settings = config.recording
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            let result: Result<AudioInputDevice, Error>
+            do {
+                result = .success(try self.bringUpEngine(settings))
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async { self.startDidFinish(result, completion: completion) }
+        }
+    }
 
-        // Touching inputNode instantiates the AUHAL; the device must be bound
-        // before the format is read or the engine is started.
-        let inputNode = engine.inputNode
-        try bind(device: device, to: inputNode)
+    /// The CoreAudio half of `start`, on `engineQueue`. Every field the tap reads
+    /// is assigned before the tap can deliver its first buffer.
+    private func bringUpEngine(_ settings: RecordingConfig) throws -> AudioInputDevice {
+        let beganAt = Date()
+
+        guard let device = AudioDeviceManager.resolveInputDevice(settings.inputDevice) else {
+            throw RecorderError.noInputDevice
+        }
+        setCurrentDevice(device)
+
+        silenceThresholdDb = settings.silenceThreshold(forDeviceUID: device.uid)
+        silenceStopSeconds = settings.silenceStopSeconds
+        minSpeechSeconds = settings.minSpeechSeconds
+        maxSeconds = settings.maxSeconds
+        leadInDefaultMs = settings.leadInDiscardMs.defaultMs
+        leadInBluetoothMs = settings.leadInDiscardMs.bluetoothMs
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
@@ -187,6 +280,13 @@ final class AudioRecorder {
         }
         self.targetFormat = targetFormat
 
+        let engine = AVAudioEngine()
+
+        // Touching inputNode instantiates the AUHAL; the device must be bound
+        // before the format is read or the engine is started.
+        let inputNode = engine.inputNode
+        try bind(device: device, to: inputNode)
+
         // The converter is built lazily from the first buffer's own format rather
         // than from a format read off the node here. Binding a specific input
         // device leaves the node briefly reporting a stale format, and handing a
@@ -197,10 +297,13 @@ final class AudioRecorder {
         converterInputFormat = nil
 
         // Bluetooth (HFP) links emit silence or noise while the codec negotiates.
-        let discardMs = recording.leadInDiscard(isBluetooth: device.isBluetooth)
+        let discardMs = settings.leadInDiscard(isBluetooth: device.isBluetooth)
         framesToDiscard = Int(Self.targetSampleRate * Double(discardMs) / 1000.0)
 
-        pcmQueue.sync { pcm = Data() }
+        // Registered before the stream opens: on Bluetooth the HFP switch is
+        // reported within milliseconds of it opening, and an observer added a
+        // main-queue hop later would miss it.
+        observeConfigurationChanges(on: engine)
 
         // format: nil means "whatever this node is actually producing". Passing an
         // explicit format here is what raised the uncatchable ObjC exception.
@@ -208,24 +311,66 @@ final class AudioRecorder {
             self?.process(buffer: buffer)
         }
 
+        isCapturing = true
         engine.prepare()
         do {
             try engine.start()
         } catch {
+            isCapturing = false
             inputNode.removeTap(onBus: 0)
-            self.engine = nil
+            removeConfigurationObserver()
             throw RecorderError.engineFailed(error.localizedDescription)
         }
 
-        isRecording = true
-        startedAt = Date()
+        self.engine = engine
 
-        observeConfigurationChanges()
-        startTicking()
+        // What CoreAudio actually cost, every single time.
+        //
+        // It is normally a fraction of a second, and it has been measured at nine
+        // — which, before the bring-up moved off the main thread, was nine seconds
+        // of frozen app. It no longer freezes anything, but the recording still
+        // starts that late and the user still loses the words they said in the
+        // meantime. The number is the only way to tell an unlucky day from a
+        // developing problem, so it is recorded on every start rather than
+        // guessed at afterwards.
+        let openSeconds = Date().timeIntervalSince(beganAt)
+        let opened = String(format: "%.2f", openSeconds)
 
         // The real sample rate is logged by process(buffer:) once the first buffer
         // arrives — that is the only value guaranteed to be accurate.
-        FTWLog.info("Recording from \(device.name) [\(device.transport.label)], discarding \(discardMs) ms lead-in")
+        FTWLog.info("Recording from \(device.name) [\(device.transport.label)], device opened in \(opened)s, discarding \(discardMs) ms lead-in")
+
+        if openSeconds >= Self.slowOpenSeconds {
+            FTWLog.warn("Opening \(device.name) took \(opened)s. CoreAudio was slow, not the app — but the recording began that late, so anything said before the start cue was not captured.")
+        }
+        return device
+    }
+
+    /// Back on the main queue with whatever the engine queue managed.
+    private func startDidFinish(
+        _ result: Result<AudioInputDevice, Error>,
+        completion: ((Result<AudioInputDevice, Error>) -> Void)?
+    ) {
+        isStarting = false
+
+        // A stop landed while the engine was still coming up. Honour it now that
+        // there is something to tear down, and tell nobody it ever started.
+        if startWasCancelled {
+            startWasCancelled = false
+            // The bring-up turned this on after the stop had already turned it
+            // off; the tap is live and feeding a recording nobody wants.
+            isCapturing = false
+            removeConfigurationObserver()
+            discardEngine()
+            return
+        }
+
+        if case .success = result {
+            isRecording = true
+            startedAt = Date()
+            startTicking()
+        }
+        completion?(result)
     }
 
     /// Binds the engine's input to a specific CoreAudio device. Without this the
@@ -250,21 +395,23 @@ final class AudioRecorder {
     // MARK: - Stop
 
     func stop(reason: StopReason = .manual) {
-        guard isRecording else { return }
+        // A stop can land while the engine is still being built — two quick
+        // triggers, or a change of mind. Cancel the bring-up rather than ignoring
+        // the stop; `startDidFinish` discards the engine when it arrives.
+        assert(Thread.isMainThread, "stop() drives isStarting, which is main-thread-only state")
+        let cancellingStart = isStarting
+        guard isRecording || cancellingStart else { return }
+        if cancellingStart { startWasCancelled = true }
         isRecording = false
+        isCapturing = false
 
         tickTimer?.invalidate()
         tickTimer = nil
 
-        if let observer = configObserver {
-            NotificationCenter.default.removeObserver(observer)
-            configObserver = nil
+        if !cancellingStart {
+            removeConfigurationObserver()
+            discardEngine()
         }
-
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        converter = nil
 
         let samples = pcmQueue.sync { pcm }
         let duration = Double(samples.count / 2) / Self.targetSampleRate
@@ -276,7 +423,9 @@ final class AudioRecorder {
         let result = Recording(
             wav: wav,
             duration: duration,
-            device: currentDevice,
+            // Nothing was captured and the engine queue may still be resolving a
+            // device, so do not claim one.
+            device: cancellingStart ? nil : currentDevice,
             reason: reason,
             peakDb: peakDb,
             meanDb: meanDb
@@ -291,10 +440,26 @@ final class AudioRecorder {
         onMain { self.onFinished?(result) }
     }
 
+    /// Stopping an engine is as synchronous as starting one, so it happens on the
+    /// engine queue too. The engine is captured here rather than read there: by
+    /// the time the block runs, `self.engine` is already the next recording's.
+    private func discardEngine() {
+        guard let engine else { return }
+        self.engine = nil
+        converter = nil
+        converterInputFormat = nil
+        engineQueue.async {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+    }
+
     // MARK: - Buffer processing
 
     private func process(buffer: AVAudioPCMBuffer) {
-        guard let targetFormat else { return }
+        // Buffers stay in flight for a moment after a stop is asked for. Dropping
+        // them here is what keeps the tail of one recording out of the next.
+        guard isCapturing, let targetFormat else { return }
 
         // Build (or rebuild) the converter from the buffer's own format. This is
         // the only format guaranteed to be correct, and it costs one comparison
@@ -428,28 +593,27 @@ final class AudioRecorder {
     ///
     /// So: if the device is still present, rebuild the tap around the new format
     /// and keep going. Only give up when the device is genuinely gone.
-    private func observeConfigurationChanges() {
+    private func observeConfigurationChanges(on engine: AVAudioEngine) {
+        removeConfigurationObserver()
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.isRecording else { return }
+            guard let self, self.isCapturing else { return }
             self.handleConfigurationChange()
         }
+    }
+
+    private func removeConfigurationObserver() {
+        guard let observer = configObserver else { return }
+        NotificationCenter.default.removeObserver(observer)
+        configObserver = nil
     }
 
     private func handleConfigurationChange() {
         guard let device = currentDevice else {
             FTWLog.warn("Audio configuration changed and no device is resolvable; finishing.")
-            stop(reason: .configurationChange)
-            return
-        }
-
-        // Is it still connected, or did it actually disappear?
-        let stillPresent = AudioDeviceManager.device(withUID: device.uid) != nil
-        guard stillPresent else {
-            FTWLog.warn("\(device.name) disconnected mid-recording; finishing with what was captured.")
             stop(reason: .configurationChange)
             return
         }
@@ -463,19 +627,37 @@ final class AudioRecorder {
         }
         reconfigureCount += 1
 
-        do {
-            try reinstallTap()
-            FTWLog.info("Audio configuration changed (\(device.name)); re-established tap and continued recording.")
-        } catch {
-            FTWLog.warn("Could not re-establish audio after configuration change: \(error.localizedDescription)")
-            stop(reason: .configurationChange)
+        // Both halves are CoreAudio and both can block: asking whether the device
+        // is still there is a property query, and rebuilding the tap closes and
+        // reopens the stream. This notification arrives on every Bluetooth start
+        // and on every device change, so it is exactly as capable of freezing the
+        // app as starting the engine was.
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+
+            // Is it still connected, or did it actually disappear?
+            guard AudioDeviceManager.device(withUID: device.uid) != nil else {
+                FTWLog.warn("\(device.name) disconnected mid-recording; finishing with what was captured.")
+                DispatchQueue.main.async { self.stop(reason: .configurationChange) }
+                return
+            }
+
+            do {
+                try self.reinstallTap()
+                FTWLog.info("Audio configuration changed (\(device.name)); re-established tap and continued recording.")
+            } catch {
+                FTWLog.warn("Could not re-establish audio after configuration change: \(error.localizedDescription)")
+                DispatchQueue.main.async { self.stop(reason: .configurationChange) }
+            }
         }
     }
 
     /// Rebuilds the tap and converter against whatever format the device now
     /// reports, without discarding audio already captured.
+    /// On `engineQueue`, like everything else that touches the engine.
     private func reinstallTap() throws {
-        guard let engine else { throw RecorderError.engineFailed("engine went away") }
+        // The recording ended while this was queued behind the bring-up.
+        guard isCapturing, let engine else { return }
 
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }

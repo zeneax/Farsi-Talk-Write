@@ -246,12 +246,14 @@ enum CLI {
             FileHandle.standardError.write(Data("\r  \(meter) \(Int(level)) dBFS ".utf8))
         }
 
-        do {
-            try recorder.start(config: config)
-            Term.out("Recording for \(Int(seconds))s — speak now.")
-        } catch {
-            Term.out("✗ \(error.localizedDescription)")
-            exit(1)
+        recorder.start(config: config) { result in
+            switch result {
+            case .success:
+                Term.out("Recording for \(Int(seconds))s — speak now.")
+            case .failure(let error):
+                Term.out("✗ \(error.localizedDescription)")
+                exit(1)
+            }
         }
 
         while !done && RunLoop.current.run(mode: .default, before: .distantFuture) {}
