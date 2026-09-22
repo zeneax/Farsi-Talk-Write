@@ -45,7 +45,7 @@
   به مدت ۱٫۲ ثانیه. به‌علاوهٔ حالت فقط نوار منو / Dock که اصلاً به دسترسی صفحه‌کلید
   نیاز ندارد.
 - **تغییر کلید** — به‌طور پیش‌فرض 🌐، یا Command راست، Option راست، یا هر کلید دیگری.
-- **سه شرط توقف** — دوباره زدن کلید، سکوت (۲٫۵ ثانیه)، یا سقف ۳۰ ثانیه. هیچ‌وقت در حالت
+- **سه شرط توقف** — دوباره زدن کلید، سکوت (۲٫۵ ثانیه)، یا سقف ۶۰ ثانیه. هیچ‌وقت در حالت
   ضبط گیر نمی‌کند.
 - **متن دقیقاً سر جای مکان‌نما درج می‌شود.** برنامه به‌خاطر می‌سپارد کدام پنجره فعال بوده
   و قبل از درج، تمرکز را برمی‌گرداند — پس کلیک روی منو باعث نمی‌شود متن به پنجرهٔ اشتباه
@@ -270,7 +270,8 @@ xattr -dr com.apple.quarantine /Applications/FarsiTalkWrite.app
 | `gemini-3.7-flash` از طریق گوگل | رایگان، یا حدود ۰٫۰۰۲ دلار پولی |
 | `gemini-3.1-pro-preview` | حدود ۰٫۰۰۷ دلار |
 
-۵ دلار اعتبار OpenRouter تقریباً معادل ۴۰۰۰ دیکته است.
+دیکته‌ای که تا سقف کامل ۶۰ ثانیه برود، دو برابر ارقام بالا هزینه دارد.
+۵ دلار اعتبار OpenRouter تقریباً معادل ۴۰۰۰ دیکتهٔ ۳۰ ثانیه‌ای است.
 
 ---
 
@@ -289,7 +290,7 @@ xattr -dr com.apple.quarantine /Applications/FarsiTalkWrite.app
 | `insertion.skipBidiForApps` | برنامه‌هایی که متن ساده می‌گیرند |
 | `insertion.alwaysCopyToClipboard` | نگه‌داشتن متن روی کلیپ‌بورد (پیش‌فرض روشن) |
 | `insertion.mode` | `paste` یا `type` |
-| `recording.maxSeconds` | سقف ضبط (پیش‌فرض ۳۰) |
+| `recording.maxSeconds` | سقف ضبط (پیش‌فرض ۶۰) |
 | `recording.chunkMaxSeconds` | آستانهٔ تقسیم — بالاتر از سقف، پس پیش‌فرض خاموش |
 | `recording.leadInDiscardMs` | حذف ابتدای صدا برای هر نوع اتصال |
 | `providers.*.reasoningEffort` | `low`/`medium`/`high` — کم حدود ۳۰٪ سریع‌تر است |
@@ -331,7 +332,7 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
 ⇧🌐  or  click 🎙 / Dock
    │
    ├─ AudioRecorder ────── 16 kHz mono WAV
-   │     stops on: trigger · 2.5s silence · 30s cap
+   │     stops on: trigger · 2.5s silence · 60s cap
    │
    ├─ pending/*.wav ────── written BEFORE sending; survives every failure below
    │

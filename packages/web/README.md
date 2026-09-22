@@ -133,8 +133,9 @@ knowing before you build on them:
   `60 + (audioSeconds × 3)`. A flat timeout cannot upload a 2.4 MB clip on a
   slow link, so the longer you spoke the more likely you were to lose it —
   exactly backwards.
-- **Chunking is off on purpose.** `timing.chunking.targetSeconds` (60) sits
-  above `timing.recording.maxSeconds` (30) so it never engages. It was built,
+- **Chunking is off on purpose.** `timing.chunking.maxSeconds` (120) is the gate,
+  and `timing.recording.maxSeconds` (60) is half of it, so nothing a recorder
+  produces is ever long enough to split. It was built,
   measured, and disabled: concurrent requests on one API key queue upstream, so
   two chunks of a 27.8s clip took 46s and 98s where the whole clip takes ~12s.
   Do not "fix" this by lowering it without measuring first.
