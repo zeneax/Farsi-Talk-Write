@@ -39,7 +39,10 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
         var body: [String: Any] = [
             "model": profile.model,
             // Bounded so a confused model cannot run away and stall the round-trip.
-            "max_tokens": 2048,
+            // A ceiling, not a budget — see kernel/timing.json. If the model does
+            // hit it, the answer below is to raise it and re-send, not to paste
+            // half a sentence.
+            "max_tokens": KernelDefaults.Request.maxOutputTokens,
             "temperature": 0,
             "messages": [
                 [
@@ -76,7 +79,7 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let json: Any
+        var json: Any
         do {
             json = try await ProviderHTTP.send(
                 request, timeout: profile.timeout(forAudioBytes: wav.count), model: profile.model
@@ -93,6 +96,26 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
             )
         }
 
+        // Truncation is the only failure in this path that arrives disguised as a
+        // success: HTTP 200, plausible Persian, and a sentence that simply stops.
+        // Pasted unchecked it reads as a complete transcript, so the user has no
+        // way to know the model was cut off. Re-sending identically would truncate
+        // in the same place at temperature 0 — the fix is a bigger ceiling.
+        if Self.hitOutputCeiling(json) {
+            FTWLog.warn("""
+                Model stopped at the \(KernelDefaults.Request.maxOutputTokens)-token ceiling; \
+                re-sending with \(KernelDefaults.Request.maxOutputTokensOnTruncation).
+                """)
+            body["max_tokens"] = KernelDefaults.Request.maxOutputTokensOnTruncation
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            json = try await ProviderHTTP.send(
+                request, timeout: profile.timeout(forAudioBytes: wav.count), model: profile.model
+            )
+            // Still truncated at twice the room means the model is looping rather
+            // than transcribing, and more room would only produce more nonsense.
+            if Self.hitOutputCeiling(json) { throw ProviderError.truncated }
+        }
+
         let text = Self.extractText(from: json)
         guard !text.isEmpty else { throw ProviderError.emptyResponse }
 
@@ -103,6 +126,25 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
             inputTokens: tokens.input,
             outputTokens: tokens.output
         )
+    }
+
+    /// Whether the model stopped because it ran out of room rather than because
+    /// it had finished.
+    ///
+    /// Both spellings are checked: OpenRouter normalises this to `finish_reason`
+    /// = "length", and also passes the upstream verdict through untouched as
+    /// `native_finish_reason`, which on Gemini is "MAX_TOKENS". A server that
+    /// reports only the native form would otherwise look like a clean stop.
+    static func hitOutputCeiling(_ json: Any) -> Bool {
+        guard let json = json as? [String: Any],
+              let choice = (json["choices"] as? [[String: Any]])?.first
+        else { return false }
+
+        let reasons = ["finish_reason", "native_finish_reason"]
+            .compactMap { choice[$0] as? String }
+            .map { $0.lowercased() }
+
+        return reasons.contains { $0 == "length" || $0 == "max_tokens" }
     }
 
     static func extractText(from json: Any) -> String {

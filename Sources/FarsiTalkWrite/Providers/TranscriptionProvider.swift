@@ -53,6 +53,9 @@ enum ProviderError: LocalizedError {
     case badURL(String)
     case http(status: Int, body: String, model: String)
     case emptyResponse
+    /// The model hit its output ceiling and stopped mid-sentence, even after the
+    /// ceiling was raised and the request re-sent.
+    case truncated
     case malformedResponse(String)
     case network(String)
 
@@ -77,6 +80,16 @@ enum ProviderError: LocalizedError {
 
             The recording is kept. Open Recordings to play it back and send it \
             again.
+            """
+
+        case .truncated:
+            return """
+            The model stopped in the middle of a sentence and did not finish.
+
+            The half-written text was thrown away rather than pasted, because a \
+            transcript that stops mid-sentence looks complete and is not.
+
+            The recording is kept. Open Recordings to send it again.
             """
 
         case .malformedResponse(let detail):
@@ -124,6 +137,13 @@ enum ProviderError: LocalizedError {
             // is real but rare, and the recording is kept in `pending/`, so it
             // costs one click in Recordings rather than a tax on every dictation.
             return KernelDefaults.Retry.emptyResponse
+        case .truncated:
+            // Not retryable here, for the same reason as emptyResponse: at
+            // temperature 0 an identical request truncates in the identical
+            // place. The provider has already re-sent once with a raised
+            // ceiling by the time this is thrown, and that retry is the one
+            // that could have worked.
+            return KernelDefaults.Retry.truncatedResponse
         case .missingAPIKey, .badURL:
             return false
         }
