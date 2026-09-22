@@ -3,7 +3,7 @@
   "note": "Every tuned number that is not macOS-specific. The test of whether something belongs here: could a browser or a Telegram bot use it? A keycode cannot. A silence threshold can. Keycodes, tap windows, HUD timings and insertion behaviour stay in Swift.",
 
   "recording": {
-    "maxSeconds": 30,
+    "maxSeconds": 60,
     "silenceStopSeconds": 1.4,
     "minSpeechSeconds": 0.8,
 
@@ -35,7 +35,7 @@
     "maxSeconds": 120,
     "enabled": false,
     "notes": {
-      "enabled": "Deliberately off. targetSeconds (60) sits above recording.maxSeconds (30) so it never engages. Chunking was built, measured against OpenRouter, and disabled: concurrent requests on one API key are queued upstream, so two chunks of a 27.8s clip took 46s and 98s where the whole clip takes about 12s. Splitting also repeats the full prompt per chunk and costs cross-sentence context for punctuation. Do not 'fix' this by lowering targetSeconds. The timeout problem it was meant to solve is handled by request.timeoutSecondsPerAudioSecond instead."
+      "enabled": "Deliberately off. The gate that decides it is maxSeconds (120): a recording shorter than that is sent whole, and recording.maxSeconds (60) is half of it, so splitting never engages. Keep both chunking numbers above the recording cap — the margin is what keeps this off. Chunking was built, measured against OpenRouter, and disabled: concurrent requests on one API key are queued upstream, so two chunks of a 27.8s clip took 46s and 98s where the whole clip takes about 12s. Splitting also repeats the full prompt per chunk and costs cross-sentence context for punctuation. Do not 'fix' this by lowering targetSeconds. The timeout problem it was meant to solve is handled by request.timeoutSecondsPerAudioSecond instead."
     }
   },
 
@@ -49,7 +49,7 @@
     "notes": {
       "timeout": "The timeout scales with payload: effective = baseTimeoutSeconds + ((bytes - audio.wavHeaderBytes) / (audio.sampleRate * audio.bitsPerSample / 8)) * timeoutSecondsPerAudioSecond. A flat timeout cannot upload a 2.4 MB clip on a slow link, so the longer you spoke the more likely you were to lose it — exactly backwards.",
       "retryAttempts": "The audio is already on disk by this point, so the only cost of trying again is a fraction of a cent — cheap next to making someone repeat themselves.",
-      "maxOutputTokens": "A ceiling on what the model may write, so a confused model cannot run away and stall the round trip. It is not a budget to spend: measured on Farsi speech the transcript costs at most about 20 output tokens per second of audio, so 2048 covers roughly 100 seconds against a recording.maxSeconds of 30. Generous on purpose — the failure it guards against is a runaway, and the failure it would cause is a silently truncated sentence, which is far worse.",
+      "maxOutputTokens": "A ceiling on what the model may write, so a confused model cannot run away and stall the round trip. It is not a budget to spend: measured on Farsi speech the transcript costs at most about 20 output tokens per second of audio, so 2048 covers roughly 100 seconds against a recording.maxSeconds of 60. Generous on purpose — the failure it guards against is a runaway, and the failure it would cause is a silently truncated sentence, which is far worse.",
       "maxOutputTokensOnTruncation": "What to raise the ceiling to when the provider says it hit the first one. Truncation is the one failure whose cause and cure are both known, so the fix is to re-send with room rather than to retry identical bytes. Doubling is enough for any plausible under-estimate; if the answer is still truncated at this ceiling the model is looping, and more room would only produce more nonsense.",
       "reasoningEffort": "Gemini 3.x refuses to have reasoning disabled entirely ('Reasoning is mandatory for this endpoint'), so 'low' rather than off — measured 5.5s against 8.1s. A provider that rejects the field should be retried once without it. Empty string means omit the field."
     },

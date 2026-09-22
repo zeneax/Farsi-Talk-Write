@@ -43,7 +43,7 @@ All three are addressed here.
   Plus menu bar / Dock only, which needs no keyboard permission at all.
 - **Retargetable key** — 🌐 by default, or Right ⌘ / Right ⌥ / any modifier.
 - **Three stop conditions** — press again, stop talking (2.5s of silence), or hit
-  the 30-second cap. It can never get stuck recording.
+  the 60-second cap. It can never get stuck recording.
 - **Inserts wherever your cursor is.** Remembers which app was frontmost when the
   trigger fired and restores focus before pasting, so clicking a menu never sends
   your text to the wrong window.
@@ -262,7 +262,8 @@ A 30-second dictation is roughly 960 audio tokens (Gemini bills audio at a flat
 | `gemini-3.7-flash` via Google | free tier, or ~$0.002 paid |
 | `gemini-3.1-pro-preview` | ~$0.007 |
 
-$5 of OpenRouter credit is roughly 4,000 dictations.
+A dictation that runs to the full 60-second cap costs twice the figures above.
+$5 of OpenRouter credit is roughly 4,000 dictations at 30 seconds each.
 
 ---
 
@@ -281,7 +282,7 @@ Settings with no UI, edited in the file directly:
 | `insertion.skipBidiForApps` | Bundle-id fragments that get plain text |
 | `insertion.alwaysCopyToClipboard` | Keep the transcript on the clipboard (default true) |
 | `insertion.mode` | `paste` or `type` (unicode keystrokes) |
-| `recording.maxSeconds` | Hard recording cap (default 30) |
+| `recording.maxSeconds` | Hard recording cap (default 60) |
 | `recording.chunkMaxSeconds` | Split threshold — above the cap, so off by default |
 | `recording.leadInDiscardMs` | Per-transport lead-in trim |
 | `providers.*.reasoningEffort` | `low`/`medium`/`high` — low is ~30% faster |

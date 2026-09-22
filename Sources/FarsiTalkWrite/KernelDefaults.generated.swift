@@ -30,7 +30,7 @@ enum KernelDefaults {
     }
 
     enum Recording {
-        static let maxSeconds: Double = 30.0
+        static let maxSeconds: Double = 60.0
         /// How long a pause ends a recording. Dead air the user sits through
         /// after every sentence, so it is as short as it can be without clipping
         /// someone who pauses mid-thought.
