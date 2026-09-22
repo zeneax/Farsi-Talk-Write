@@ -1,6 +1,6 @@
 {
   "name": "@mazarix/voice-kernel",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "The shared kernel behind FarsiTalkWrite: Persian/English transcription prompts, tuned recording and retry constants, and the bidi isolation algorithm that keeps embedded Latin words where they were spoken.",
   "license": "MIT",
   "author": {
