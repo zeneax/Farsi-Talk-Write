@@ -169,6 +169,8 @@ let baseTimeoutSeconds = double(timing, "request.baseTimeoutSeconds", file: timi
 let timeoutPerAudioSecond = double(timing, "request.timeoutSecondsPerAudioSecond", file: timingFile)
 let retryAttempts = int(timing, "request.retryAttempts", file: timingFile)
 let reasoningEffort = string(timing, "request.reasoningEffort", file: timingFile)
+let maxOutputTokens = int(timing, "request.maxOutputTokens", file: timingFile)
+let maxOutputTokensOnTruncation = int(timing, "request.maxOutputTokensOnTruncation", file: timingFile)
 
 let retryableStatuses = intArray(timing, "request.retry.retryable.httpStatus", file: timingFile)
 let nonRetryableStatuses = intArray(timing, "request.retry.notRetryable.httpStatus", file: timingFile)
@@ -178,6 +180,7 @@ let retryUnknownStatus = bool(timing, "request.retry.retryable.unknownHttpStatus
 // Stored under notRetryable, so the flag is inverted to match the "is this
 // worth another attempt?" sense the other Retry members carry.
 let emptyResponseIsRetryable = !bool(timing, "request.retry.notRetryable.emptyResponse", file: timingFile)
+let truncatedIsRetryable = !bool(timing, "request.retry.notRetryable.truncatedResponse", file: timingFile)
 
 guard let statusRanges = value(timing, "request.retry.retryable.httpStatusRanges", file: timingFile) as? [[NSNumber]],
       statusRanges.allSatisfy({ $0.count == 2 }) else {
@@ -266,6 +269,15 @@ enum KernelDefaults {
         /// "low", "medium", "high", or "" to omit the field. Gemini 3.x refuses
         /// to have reasoning disabled outright.
         static let reasoningEffort = \(literal(reasoningEffort))
+        /// A ceiling, not a budget: it stops a confused model from running away
+        /// and stalling the round trip. Farsi speech costs at most about 20
+        /// output tokens per second of audio, so this is deliberately generous —
+        /// a runaway is recoverable, a silently truncated sentence is not.
+        static let maxOutputTokens: Int = \(maxOutputTokens)
+        /// Raised to this and re-sent once when the provider says it hit the
+        /// ceiling. Truncation is the one failure whose cause and cure are both
+        /// known, so the answer is a different request, not the same one again.
+        static let maxOutputTokensOnTruncation: Int = \(maxOutputTokensOnTruncation)
     }
 
     /// The retry policy, as data, so the web and Telegram consumers match it.
@@ -285,6 +297,11 @@ enum KernelDefaults {
         /// reconfirm what the first one said. Silence is decided locally now, so
         /// this no longer covers the case it was originally added for.
         static let emptyResponse = \(emptyResponseIsRetryable)
+        /// Whether a truncated answer is worth another identical attempt. It is
+        /// not — at temperature 0 it truncates in the same place. The provider
+        /// re-sends once with a raised ceiling instead, which is a different
+        /// request and so can actually succeed.
+        static let truncatedResponse = \(truncatedIsRetryable)
 
         /// Whether an HTTP status is worth another attempt.
         static func allowsRetry(status: Int) -> Bool {

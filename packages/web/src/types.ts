@@ -82,6 +82,11 @@ export interface RetryPolicy {
     readonly httpStatus: readonly number[];
     /** True meaning "an empty 200 is NOT retryable". */
     readonly emptyResponse: boolean;
+    /**
+     * True meaning "a truncated answer is NOT worth an identical retry". Handle
+     * it by re-sending with `maxOutputTokensOnTruncation` instead.
+     */
+    readonly truncatedResponse: boolean;
     readonly missingApiKey: boolean;
     readonly badUrl: boolean;
   };
@@ -95,6 +100,15 @@ export interface RequestTiming {
   readonly retryAttempts: number;
   /** `"low" | "medium" | "high"`, or `""` to omit the field entirely. */
   readonly reasoningEffort: string;
+  /**
+   * A ceiling on the model's output, not a budget to spend. It exists so a
+   * confused model cannot run away; it is generous because the failure it
+   * prevents is recoverable and the one it would cause — a silently truncated
+   * sentence — is not.
+   */
+  readonly maxOutputTokens: number;
+  /** Raise to this and re-send once when the provider reports it hit the ceiling. */
+  readonly maxOutputTokensOnTruncation: number;
   readonly notes: Readonly<Record<string, string>>;
   readonly retry: RetryPolicy;
 }

@@ -70,6 +70,15 @@ enum KernelDefaults {
         /// "low", "medium", "high", or "" to omit the field. Gemini 3.x refuses
         /// to have reasoning disabled outright.
         static let reasoningEffort = "low"
+        /// A ceiling, not a budget: it stops a confused model from running away
+        /// and stalling the round trip. Farsi speech costs at most about 20
+        /// output tokens per second of audio, so this is deliberately generous —
+        /// a runaway is recoverable, a silently truncated sentence is not.
+        static let maxOutputTokens: Int = 2048
+        /// Raised to this and re-sent once when the provider says it hit the
+        /// ceiling. Truncation is the one failure whose cause and cure are both
+        /// known, so the answer is a different request, not the same one again.
+        static let maxOutputTokensOnTruncation: Int = 4096
     }
 
     /// The retry policy, as data, so the web and Telegram consumers match it.
@@ -89,6 +98,11 @@ enum KernelDefaults {
         /// reconfirm what the first one said. Silence is decided locally now, so
         /// this no longer covers the case it was originally added for.
         static let emptyResponse = false
+        /// Whether a truncated answer is worth another identical attempt. It is
+        /// not — at temperature 0 it truncates in the same place. The provider
+        /// re-sends once with a raised ceiling instead, which is a different
+        /// request and so can actually succeed.
+        static let truncatedResponse = false
 
         /// Whether an HTTP status is worth another attempt.
         static func allowsRetry(status: Int) -> Bool {
