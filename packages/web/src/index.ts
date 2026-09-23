@@ -22,6 +22,7 @@ export type {
   RecordingTiming,
   ChunkingTiming,
   RetryPolicy,
+  RescuePolicy,
   RequestTiming,
   AudioTiming,
   Timing,
@@ -127,4 +128,33 @@ export function silenceThresholdDb(deviceId?: string): number {
     if (specific !== undefined) return specific;
   }
   return timing.recording.silenceThresholdDb.default;
+}
+
+/**
+ * Whether a chat-completions answer was stopped on content rather than finished.
+ *
+ * Both spellings are read. `finish_reason` is the OpenAI-compatible word;
+ * `native_finish_reason` is the upstream model's own, and Gemini's is the one
+ * that actually arrives. Found on the Mazarix meeting listener's first real
+ * run: forty-seven seconds of a dental clinic's front desk came back as two
+ * words and `SAFETY`.
+ *
+ * A filtered stop is not retryable — the identical bytes meet the identical
+ * filter — and it is not the end: `timing.request.rescue` names a second
+ * engine on the provider's transcription endpoint, which has no filter.
+ */
+export function wasFiltered(finishReason: unknown, nativeFinishReason?: unknown): boolean {
+  const stops = timing.request.rescue.stopReasons.map((s) => s.toLowerCase());
+  const finish = String(finishReason ?? "").toLowerCase();
+  const native = String(nativeFinishReason ?? "").toLowerCase();
+  return (finish !== "" && stops.includes(finish)) || (native !== "" && stops.includes(native));
+}
+
+/**
+ * The transcription endpoint's language hint for a prompt language, or
+ * `undefined` when the engine should detect it itself — which is what
+ * `"auto"` asks for.
+ */
+export function rescueLanguageHint(language: PromptLanguage): string | undefined {
+  return timing.request.rescue.languageHint[language] || undefined;
 }

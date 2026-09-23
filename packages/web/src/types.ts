@@ -87,9 +87,30 @@ export interface RetryPolicy {
      * it by re-sending with `maxOutputTokensOnTruncation` instead.
      */
     readonly truncatedResponse: boolean;
+    /**
+     * True meaning "a filtered stop is NOT worth an identical retry". Handle it
+     * by sending the same audio to `RequestTiming.rescue.engine` instead.
+     */
+    readonly filteredResponse: boolean;
     readonly missingApiKey: boolean;
     readonly badUrl: boolean;
   };
+  readonly notes: Readonly<Record<string, string>>;
+}
+
+/** The second engine, for when the first one's final answer is not a transcript. */
+export interface RescuePolicy {
+  /** A dedicated speech-to-text model on the transcription endpoint. */
+  readonly engine: string;
+  /** Relative to the provider's API root — `audio/transcriptions`. */
+  readonly endpoint: string;
+  /** Which final outcomes of the first engine send the audio here. */
+  readonly on: readonly ("filtered" | "empty" | "transport")[];
+  readonly attempts: number;
+  /** ISO-639-1 per prompt language; empty means omit the field. */
+  readonly languageHint: Readonly<Record<PromptLanguage, string>>;
+  /** Finish reasons, either spelling, that mean the provider stopped on content. */
+  readonly stopReasons: readonly string[];
   readonly notes: Readonly<Record<string, string>>;
 }
 
@@ -109,6 +130,8 @@ export interface RequestTiming {
   readonly maxOutputTokens: number;
   /** Raise to this and re-send once when the provider reports it hit the ceiling. */
   readonly maxOutputTokensOnTruncation: number;
+  /** The second engine and the outcomes that send audio to it. */
+  readonly rescue: RescuePolicy;
   readonly notes: Readonly<Record<string, string>>;
   readonly retry: RetryPolicy;
 }

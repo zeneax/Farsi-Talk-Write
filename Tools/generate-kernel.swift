@@ -102,6 +102,13 @@ func intArray(_ root: [String: Any], _ path: String, file: String) -> [Int] {
     return v.map(\.intValue)
 }
 
+func stringArray(_ root: [String: Any], _ path: String, file: String) -> [String] {
+    guard let array = value(root, path, file: file) as? [String] else {
+        fail("\(file): \(path) is not an array of strings")
+    }
+    return array
+}
+
 func bool(_ root: [String: Any], _ path: String, file: String) -> Bool {
     guard let v = value(root, path, file: file) as? NSNumber else {
         fail("\(file): \(path) is not a boolean")
@@ -181,6 +188,18 @@ let retryUnknownStatus = bool(timing, "request.retry.retryable.unknownHttpStatus
 // worth another attempt?" sense the other Retry members carry.
 let emptyResponseIsRetryable = !bool(timing, "request.retry.notRetryable.emptyResponse", file: timingFile)
 let truncatedIsRetryable = !bool(timing, "request.retry.notRetryable.truncatedResponse", file: timingFile)
+let filteredIsRetryable = !bool(timing, "request.retry.notRetryable.filteredResponse", file: timingFile)
+
+let rescueEngine = string(timing, "request.rescue.engine", file: timingFile)
+let rescueEndpoint = string(timing, "request.rescue.endpoint", file: timingFile)
+let rescueAttempts = int(timing, "request.rescue.attempts", file: timingFile)
+let rescueOn = stringArray(timing, "request.rescue.on", file: timingFile)
+// Lower-cased here so the comparison site reads the answer's field, lower-cases
+// it, and looks it up — no second normalisation to forget.
+let rescueStopReasons = stringArray(timing, "request.rescue.stopReasons", file: timingFile).map { $0.lowercased() }
+let rescueHintFarsi = string(timing, "request.rescue.languageHint.farsi", file: timingFile)
+let rescueHintEnglish = string(timing, "request.rescue.languageHint.english", file: timingFile)
+let rescueHintAuto = string(timing, "request.rescue.languageHint.auto", file: timingFile)
 
 guard let statusRanges = value(timing, "request.retry.retryable.httpStatusRanges", file: timingFile) as? [[NSNumber]],
       statusRanges.allSatisfy({ $0.count == 2 }) else {
@@ -302,6 +321,11 @@ enum KernelDefaults {
         /// re-sends once with a raised ceiling instead, which is a different
         /// request and so can actually succeed.
         static let truncatedResponse = \(truncatedIsRetryable)
+        /// Whether a filtered stop is worth another identical attempt. It is
+        /// not — the identical bytes meet the identical filter. The same audio
+        /// goes to `Rescue.engine` instead, which is a different engine and so
+        /// can actually answer.
+        static let filteredResponse = \(filteredIsRetryable)
 
         /// Whether an HTTP status is worth another attempt.
         static func allowsRetry(status: Int) -> Bool {
@@ -309,6 +333,47 @@ enum KernelDefaults {
             if retryableStatuses.contains(status) { return true }
             if retryableStatusRanges.contains(where: { $0.contains(status) }) { return true }
             return unknownStatus
+        }
+    }
+
+    /// The second engine, for when the first one's final answer is not a
+    /// transcript. See kernel/timing.json `request.rescue` for the bake-off
+    /// that chose it and the outcomes that send audio to it.
+    enum Rescue {
+        /// A dedicated speech-to-text model on the provider's transcription
+        /// endpoint: no safety filter, no prompt, no reasoning.
+        static let engine = \(literal(rescueEngine))
+        /// Relative to the provider's API root.
+        static let endpoint = \(literal(rescueEndpoint))
+        static let attempts: Int = \(rescueAttempts)
+        /// Which final outcomes of the first engine send the audio here:
+        /// "filtered", "empty", "transport". Truncation has its own cure.
+        static let on: Set<String> = [\(rescueOn.map(literal).joined(separator: ", "))]
+        /// Finish reasons, either spelling, that mean the provider stopped on
+        /// content. Already lower-cased.
+        static let stopReasons: Set<String> = [\(rescueStopReasons.map(literal).joined(separator: ", "))]
+        /// ISO-639-1 hint per prompt language; empty means let the engine detect.
+        static let languageHints: [String: String] = [
+            "farsi": \(literal(rescueHintFarsi)),
+            "english": \(literal(rescueHintEnglish)),
+            "auto": \(literal(rescueHintAuto)),
+        ]
+
+        /// Whether a chat-completions answer was stopped on content rather than
+        /// finished. Both spellings are read: `finish_reason` is the
+        /// OpenAI-compatible word, `native_finish_reason` is the upstream
+        /// model's own, and Gemini's is the one that actually arrives.
+        static func isFiltered(finishReason: String?, nativeFinishReason: String?) -> Bool {
+            [finishReason, nativeFinishReason]
+                .compactMap { $0?.lowercased() }
+                .contains { !$0.isEmpty && stopReasons.contains($0) }
+        }
+
+        /// The transcription endpoint's language field for a prompt language
+        /// ("farsi", "english", "auto"), or nil to let the engine detect.
+        static func languageHint(forLanguage language: String) -> String? {
+            guard let hint = languageHints[language], !hint.isEmpty else { return nil }
+            return hint
         }
     }
 

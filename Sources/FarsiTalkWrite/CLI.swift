@@ -36,6 +36,8 @@ enum CLI {
                                               record and write a WAV to /tmp
       FarsiTalkWrite --test-transcribe FILE [--provider ID]
                                               transcribe a WAV, print text + tokens
+      FarsiTalkWrite --test-rescue FILE [--provider ID]
+                                              send a WAV straight to the rescue engine
       FarsiTalkWrite --test-insert TEXT       paste text into the frontmost app
       FarsiTalkWrite --test-hotkey            log key events and trigger fires
       FarsiTalkWrite --set-key [--provider ID] [--from-file PATH]
@@ -70,6 +72,8 @@ enum CLI {
             testAudio(deviceUID: options["device"], seconds: Double(options["seconds"] ?? "") ?? 5)
         case "--test-transcribe":
             testTranscribe(path: positional(args), providerID: options["provider"])
+        case "--test-rescue":
+            testRescue(path: positional(args), providerID: options["provider"])
         case "--test-insert":
             testInsert(text: positional(args))
         case "--test-hotkey":
@@ -305,6 +309,65 @@ enum CLI {
                 if let cost = ProviderRegistry.estimatedCost(for: result) {
                     Term.row("est. cost", cost)
                 }
+                Term.row("characters", String(result.text.count))
+                Term.out()
+            } catch {
+                Term.out()
+                Term.out("  ✗ \(error.localizedDescription)")
+                Term.out()
+                exitCode = 1
+            }
+            done.signal()
+        }
+
+        done.wait()
+        exit(exitCode)
+    }
+
+    // MARK: - --test-rescue
+
+    /// Exercises the second engine on its own. In normal use it is only reached
+    /// after the first engine's final answer was not a transcript, which cannot
+    /// be provoked on demand — a clip that trips the safety filter cannot be
+    /// kept to test with — so this is how the path is verified.
+    static func testRescue(path: String?, providerID: String?) {
+        guard let path else {
+            Term.out("Usage: FarsiTalkWrite --test-rescue FILE.wav [--provider ID]")
+            exit(2)
+        }
+        guard let wav = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            Term.out("Could not read \(path)")
+            exit(1)
+        }
+
+        var config = ConfigStore.load()
+        if let providerID, !providerID.isEmpty {
+            guard config.providers[providerID] != nil else {
+                Term.out("No such provider: \(providerID)")
+                exit(2)
+            }
+            config.activeProvider = providerID
+        }
+
+        Term.heading("Rescue engine")
+        Term.row("file", "\(path) (\(wav.count / 1024) KB)")
+        Term.row("through", config.activeProvider)
+        Term.row("engine", KernelDefaults.Rescue.engine)
+        Term.row("endpoint", KernelDefaults.Rescue.endpoint)
+        Term.row("language", KernelDefaults.Rescue.languageHint(forLanguage: config.language.rawValue) ?? "(detect)")
+
+        let done = DispatchSemaphore(value: 0)
+        var exitCode: Int32 = 0
+
+        Task {
+            let started = Date()
+            do {
+                let result = try await ProviderRegistry.rescue(wav: wav, config: config)
+                Term.heading("Result")
+                Term.out("  \(result.text)")
+                Term.out()
+                Term.row("latency", String(format: "%.1f s", Date().timeIntervalSince(started)))
+                Term.row("tokens", result.tokenSummary)
                 Term.row("characters", String(result.text.count))
                 Term.out()
             } catch {

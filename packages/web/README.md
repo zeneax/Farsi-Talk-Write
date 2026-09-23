@@ -119,6 +119,8 @@ import {
   timing,
   effectiveTimeoutSeconds,
   allowsRetry,
+  wasFiltered,
+  rescueLanguageHint,
   seemsSilent,
   silenceThresholdDb,
   bytesPerAudioSecond,
@@ -142,6 +144,18 @@ knowing before you build on them:
 - **An empty 200 is not retryable.** Requests go out at temperature 0, so
   re-sending identical bytes returns an identical empty answer. `allowsRetry`
   covers HTTP statuses; 400 and 429 are retryable, 401/403/404 are not.
+- **A truncated answer is re-sent with room, not retried.** `maxOutputTokens`
+  is a ceiling against a runaway model, not a budget; when a provider reports
+  it was hit, the same request goes again at `maxOutputTokensOnTruncation`.
+  `truncatedResponse` is not retryable as-is, because at temperature 0 it
+  truncates in the same place.
+- **A filtered stop is not retried and not the end.** Gemini's safety filter
+  stops a transcript on content it dislikes, on ordinary speech, at temperature
+  0 — the same bytes meet the same filter, so `filteredResponse` is not
+  retryable. `timing.request.rescue` names a second engine on the provider's
+  transcription endpoint, which has no filter; send the same audio there
+  (`wasFiltered()` recognises the stop, `rescueLanguageHint()` gives the
+  language field) and keep whatever the first engine wrote before it stopped.
 - **Silence is decided locally**, before anything is uploaded:
   `seemsSilent(peakDb, meanDb)`. The alternative was paying a round trip for a
   provider to tell you the room was quiet.

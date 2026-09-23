@@ -15,7 +15,7 @@ prompts, which is the exact problem this removes.
 | File | What it is |
 |---|---|
 | `prompts.json` | The three transcription system prompts — Persian, English, and the follow-the-speaker `auto` — each with the intent behind it. |
-| `timing.json` | Every tuned number that is not macOS-specific, plus the retry policy, each with the reason it is what it is. |
+| `timing.json` | Every tuned number that is not macOS-specific, plus the retry policy and the rescue engine (which second engine answers when the first one's answer is filtered or empty), each with the reason it is what it is. |
 | `bidi-cases.json` | Input/expected pairs for the direction algorithm, run by both implementations. |
 
 ## How a change here reaches its consumers

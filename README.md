@@ -134,6 +134,13 @@ Three profiles ship ready to use, switchable from a menu with no restart:
   counts and estimated cost in plain language.
 - **Optional fallback provider** — if the active one fails, retry on another
   automatically.
+- **A second engine when the first one will not answer** — Gemini's safety
+  filter sometimes stops a transcript on perfectly ordinary speech, and sending
+  the same audio again meets the same filter. When that happens (or the answer
+  comes back empty, or the network gives out), the same recording goes to a
+  dedicated speech-to-text model on OpenRouter's transcription endpoint, which
+  has no filter. You get text instead of an error; the log says which engine
+  answered.
 
 ### Speed
 
@@ -340,7 +347,8 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
    │
    ├─ saved to pending/ ── survives any failure below
    │
-   ├─ TranscriptionProvider ── OpenRouter / Google, 3 retries, optional fallback
+   ├─ TranscriptionProvider ── OpenRouter / Google, 3 retries, optional fallback,
+   │                           then a second engine if the answer was filtered or empty
    │
    ├─ BidiText ─────────── Unicode isolation for mixed Farsi/Latin
    │

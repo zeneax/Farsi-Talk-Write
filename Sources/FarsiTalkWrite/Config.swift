@@ -57,6 +57,19 @@ struct ProviderProfile: Codable {
     }
     var modelPresets: [String] = []
 
+    /// Whether this provider serves the kernel's rescue endpoint
+    /// (`KernelDefaults.Rescue.endpoint`, a dedicated speech-to-text engine
+    /// with no safety filter).
+    ///
+    /// Only OpenRouter does today, and the JSON `input_audio` body the kernel
+    /// describes is OpenRouter's shape — OpenAI's own audio/transcriptions is
+    /// multipart — so a generic OpenAI-shaped server would 404 or 400 into it
+    /// rather than answer. Skipping the rescue there is the correct outcome.
+    var supportsRescue: Bool {
+        guard kind == .openAICompatible, let host = URL(string: baseURL)?.host else { return false }
+        return host == "openrouter.ai" || host.hasSuffix(".openrouter.ai")
+    }
+
     /// How much the model is allowed to "think" before answering, for providers
     /// that expose it: "low", "medium", "high", or "" to omit the field.
     /// Transcription needs none, and low is measurably faster.

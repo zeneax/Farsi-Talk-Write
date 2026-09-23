@@ -46,12 +46,129 @@ enum ProviderRegistry {
     }
 
     /// Transcribes with the active provider, falling back once to
-    /// `fallbackProvider` if one is configured. A Google outage or a free-tier
-    /// rate limit then becomes invisible rather than a failed dictation.
+    /// `fallbackProvider` if one is configured, and — when the final answer is
+    /// still not a transcript — sending the same audio to the kernel's rescue
+    /// engine. A Google outage, a free-tier rate limit or Gemini's safety filter
+    /// then becomes a log line rather than a failed dictation.
     static func transcribe(
         wav: Data,
         config: Config,
         onAttempt: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> TranscriptionResult {
+        do {
+            return try await transcribeFirstEngine(wav: wav, config: config, onAttempt: onAttempt)
+        } catch {
+            // Which outcomes go to the second engine is kernel data, not a
+            // judgement made here; the shape of the failure is all this decides.
+            guard let outcome = rescueOutcome(for: error),
+                  KernelDefaults.Rescue.on.contains(outcome) else { throw error }
+            guard let profile = config.activeProfile, profile.supportsRescue else {
+                FTWLog.info("First engine ended with \(outcome); \(config.activeProvider) has no \(KernelDefaults.Rescue.endpoint) endpoint, so there is no rescue.")
+                throw error
+            }
+            FTWLog.warn("First engine ended with \(outcome); sending the same audio to \(KernelDefaults.Rescue.engine).")
+            do {
+                return try await rescue(wav: wav, config: config)
+            } catch {
+                FTWLog.warn("Rescue engine failed too: \(error.localizedDescription)")
+            }
+            // The original failure is the one to explain — and for a filtered
+            // stop it carries whatever the first engine wrote before stopping.
+            throw error
+        }
+    }
+
+    /// The kernel's name for a final failure, or nil when no second engine
+    /// could change the answer: a rejected key, an unknown model, a bad URL, and
+    /// truncation, which has its own cure in the provider.
+    static func rescueOutcome(for error: Error) -> String? {
+        guard let error = error as? ProviderError else { return nil }
+        switch error {
+        case .filtered: return "filtered"
+        case .emptyResponse: return "empty"
+        case .network: return "transport"
+        // A response that could not be read three times running is the
+        // provider misbehaving, which is the same class as a network failure.
+        case .malformedResponse: return "transport"
+        case .http(let status, _, _):
+            return KernelDefaults.Retry.allowsRetry(status: status) ? "transport" : nil
+        case .truncated, .missingAPIKey, .badURL: return nil
+        }
+    }
+
+    /// The second engine: the same bytes to the provider's transcription
+    /// endpoint, which serves dedicated speech-to-text models with no safety
+    /// filter, no prompt and no reasoning. What it loses against Gemini is
+    /// orthography — a worse sentence rather than a lost one. The engine, the
+    /// endpoint, the attempt count and the language hint are all kernel data.
+    static func rescue(wav: Data, config: Config) async throws -> TranscriptionResult {
+        guard let profile = config.activeProfile, profile.supportsRescue else {
+            throw ProviderError.badURL("\(config.activeProvider) does not serve \(KernelDefaults.Rescue.endpoint)")
+        }
+        guard let key = Keychain.get(forProvider: config.activeProvider) else {
+            throw ProviderError.missingAPIKey(profileName: profile.displayName)
+        }
+
+        let url = try ProviderHTTP.url(base: profile.baseURL, path: "/" + KernelDefaults.Rescue.endpoint)
+        var body: [String: Any] = [
+            "model": KernelDefaults.Rescue.engine,
+            "input_audio": ["data": wav.base64EncodedString(), "format": "wav"],
+        ]
+        // Empty in the kernel means omit the field and let the engine detect,
+        // which is what "auto" asks for.
+        if let hint = KernelDefaults.Rescue.languageHint(forLanguage: config.language.rawValue) {
+            body["language"] = hint
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        for (name, value) in profile.extraHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let attempts = max(1, KernelDefaults.Rescue.attempts)
+        for attempt in 1...attempts {
+            do {
+                let json = try await ProviderHTTP.send(
+                    request, timeout: profile.timeout(forAudioBytes: wav.count), model: KernelDefaults.Rescue.engine
+                )
+                let text = ((json as? [String: Any])?["text"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !text.isEmpty else { throw ProviderError.emptyResponse }
+                let tokens = ProviderHTTP.tokens(from: json)
+                FTWLog.info("Rescue engine \(KernelDefaults.Rescue.engine) answered on attempt \(attempt)/\(attempts): \(text.count) characters.")
+                return TranscriptionResult(
+                    text: text, model: KernelDefaults.Rescue.engine,
+                    inputTokens: tokens.input, outputTokens: tokens.output
+                )
+            } catch let error as ProviderError {
+                // One more try on transport or a server-side status; none on
+                // anything the request itself caused. 400 is retryable in the
+                // generic policy for the reasoning-field case, which cannot
+                // arise here — a 400 from this body is this body's fault.
+                let again: Bool
+                switch error {
+                case .network, .malformedResponse: again = true
+                case .http(let status, _, _): again = status != 400 && KernelDefaults.Retry.allowsRetry(status: status)
+                default: again = false
+                }
+                guard again, attempt < attempts else { throw error }
+                FTWLog.warn("Rescue attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+        }
+        throw ProviderError.emptyResponse
+    }
+
+    /// The first engine: the active provider with its retries, then the
+    /// configured fallback provider once.
+    private static func transcribeFirstEngine(
+        wav: Data,
+        config: Config,
+        onAttempt: (@Sendable (Int, Int) -> Void)?
     ) async throws -> TranscriptionResult {
         let provider = try makeActive(config: config)
 

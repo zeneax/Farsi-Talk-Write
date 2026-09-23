@@ -56,6 +56,11 @@ enum ProviderError: LocalizedError {
     /// The model hit its output ceiling and stopped mid-sentence, even after the
     /// ceiling was raised and the request re-sent.
     case truncated
+    /// The provider's safety filter stopped the transcript. `partial` is
+    /// whatever it wrote before stopping — often nothing, sometimes half the
+    /// sentence — and is worth more than an error message when the rescue
+    /// engine cannot answer either.
+    case filtered(partial: String)
     case malformedResponse(String)
     case network(String)
 
@@ -88,6 +93,20 @@ enum ProviderError: LocalizedError {
 
             The half-written text was thrown away rather than pasted, because a \
             transcript that stops mid-sentence looks complete and is not.
+
+            The recording is kept. Open Recordings to send it again.
+            """
+
+        case .filtered(let partial):
+            let kept = partial.isEmpty
+                ? ""
+                : "\n\nThe words it did write before stopping are on the clipboard."
+            return """
+            The provider's safety filter stopped the transcript.
+
+            This happens on ordinary speech and is not about anything you said — \
+            the same recording sent again meets the same filter, so it was sent \
+            to a second engine instead, and that one could not answer either.\(kept)
 
             The recording is kept. Open Recordings to send it again.
             """
@@ -144,6 +163,12 @@ enum ProviderError: LocalizedError {
             // ceiling by the time this is thrown, and that retry is the one
             // that could have worked.
             return KernelDefaults.Retry.truncatedResponse
+        case .filtered:
+            // Not retryable, for the same reason: the identical bytes meet the
+            // identical filter. The cure is a different engine, not a different
+            // request — `ProviderRegistry.rescue` sends the same audio to
+            // `KernelDefaults.Rescue.engine` once this loop has given up.
+            return KernelDefaults.Retry.filteredResponse
         case .missingAPIKey, .badURL:
             return false
         }
