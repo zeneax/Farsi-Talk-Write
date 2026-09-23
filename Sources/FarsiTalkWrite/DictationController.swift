@@ -334,7 +334,7 @@ final class DictationController {
                 }
 
             } catch {
-                self.fail(error.localizedDescription)
+                self.fail(with: error)
             }
         }
     }
@@ -557,7 +557,7 @@ final class DictationController {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 if case .inserted = self.state { self.state = .idle }
             } catch {
-                self.fail(error.localizedDescription)
+                self.fail(with: error)
             }
         }
     }
@@ -571,6 +571,19 @@ final class DictationController {
                 self.fail("Microphone access was denied. Grant it in \(Permissions.SettingsPane.microphone.clickPath).")
             }
         }
+    }
+
+    /// A failure that may still carry words. When the provider's filter stopped
+    /// the transcript and the rescue engine could not answer either, whatever
+    /// the first engine wrote before stopping goes on the clipboard and into the
+    /// archive — half a sentence in front of the person beats a message alone.
+    private func fail(with error: Error) {
+        if case .filtered(let partial)? = error as? ProviderError, !partial.isEmpty {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(BidiText.stripping(partial), forType: .string)
+            TranscriptArchive.append(partial, model: config.activeProfile?.model, delivered: false)
+        }
+        fail(error.localizedDescription)
     }
 
     private func fail(_ message: String) {

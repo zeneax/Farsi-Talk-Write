@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "note": "Every tuned number that is not macOS-specific. The test of whether something belongs here: could a browser or a Telegram bot use it? A keycode cannot. A silence threshold can. Keycodes, tap windows, HUD timings and insertion behaviour stay in Swift.",
 
   "recording": {
@@ -46,6 +46,24 @@
     "reasoningEffort": "low",
     "maxOutputTokens": 2048,
     "maxOutputTokensOnTruncation": 4096,
+
+    "rescue": {
+      "engine": "openai/gpt-4o-mini-transcribe",
+      "endpoint": "audio/transcriptions",
+      "on": ["filtered", "empty", "transport"],
+      "attempts": 2,
+      "languageHint": { "farsi": "fa", "english": "en", "auto": "" },
+      "stopReasons": ["content_filter", "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"],
+      "notes": {
+        "engine": "A dedicated speech-to-text model on OpenRouter's transcription endpoint: no safety filter, no prompt, no reasoning. Chosen on 2026-09-23 against a forty-second Persian reference — 97.7% similarity, 5.3 s, $0.0013 — over gpt-transcribe (97.4%, 7.3 s, $0.0031), gpt-4o-transcribe (96.8%, 4.4 s, $0.0027), chirp-3 (95.9%, 16 s, $0.011) and whisper-large-v3 (95.1%, 13 s, $0.0003). Gemini with the kernel prompt scored 99% and stays the first engine; what this one loses is orthography, which is a worse sentence rather than a lost one.",
+        "endpoint": "Relative to the provider's API root, so https://openrouter.ai/api/v1 + /audio/transcriptions. The body is { model, input_audio: { data: <base64>, format: <wire format> }, language?: <hint> } and the answer is { text, usage: { cost } }. Not chat/completions: there is no prompt to send and no choices array to read.",
+        "on": "Which final outcomes of the first engine send the audio to the second. 'filtered' is the safety stop; 'empty' is a 200 with no text after silence was already ruled out locally; 'transport' is a network failure or a retryable status that is still failing after retryAttempts. Truncation is not here — it has its own cure in maxOutputTokensOnTruncation.",
+        "attempts": "One retry on transport or a server-side status, none on anything the request itself caused. The audio is already in hand, so the only cost is a fraction of a cent.",
+        "languageHint": "ISO-639-1 for the transcription endpoint's language field. Empty means omit the field and let the engine detect, which is what 'auto' asks for.",
+        "stopReasons": "The words a filtered stop arrives under. finish_reason carries the OpenAI-compatible one; native_finish_reason carries Gemini's own, and Gemini's is the one that actually arrives. A consumer reads both, case-insensitively, and treats any of these as 'filtered' — never as 'empty', which would look identical when no words were written before the stop."
+      }
+    },
+
     "notes": {
       "timeout": "The timeout scales with payload: effective = baseTimeoutSeconds + ((bytes - audio.wavHeaderBytes) / (audio.sampleRate * audio.bitsPerSample / 8)) * timeoutSecondsPerAudioSecond. A flat timeout cannot upload a 2.4 MB clip on a slow link, so the longer you spoke the more likely you were to lose it — exactly backwards.",
       "retryAttempts": "The audio is already on disk by this point, so the only cost of trying again is a fraction of a cent — cheap next to making someone repeat themselves.",
@@ -66,6 +84,7 @@
         "httpStatus": [401, 403, 404],
         "emptyResponse": true,
         "truncatedResponse": true,
+        "filteredResponse": true,
         "missingApiKey": true,
         "badUrl": true
       },
@@ -74,6 +93,7 @@
         "401/403/404": "A rejected key cannot change its mind, and an unknown model will not appear. These are the failures that genuinely cannot succeed on a retry.",
         "emptyResponse": "Not retryable. Every request goes out at temperature 0, so re-sending identical bytes returns an identical empty response — three attempts and two seconds of backoff to reconfirm what the first one said. Silence is now decided locally (recording.silenceGate) so it no longer reaches here. A provider under upstream rate limiting answering 200-with-empty instead of 429 is real but rare, and the recording is kept, so it costs one retry by hand rather than a tax on every dictation.",
         "truncatedResponse": "Not retryable by the generic loop, for the same reason as emptyResponse: at temperature 0 the identical request truncates in the identical place. It is handled where it happens instead — the request is re-sent once with maxOutputTokensOnTruncation, which is a different request and so can actually succeed. This entry exists so a consumer that reaches the generic policy does not waste three attempts reconfirming the first answer.",
+        "filteredResponse": "Not retryable, for the same reason as emptyResponse: at temperature 0 the identical bytes meet the identical filter. Gemini's safety stop arrives as finish_reason content_filter and native_finish_reason SAFETY (or RECITATION, BLOCKLIST, PROHIBITED_CONTENT, SPII), usually with zero output tokens and sometimes with the words written before the stop. It fired on 1 of 51 dictations and 9 of 37 meeting pieces at Mazarix on ordinary speech. It is handled where it happens: the same audio goes to request.rescue.engine, which is a different engine and so can actually answer. This entry exists so a consumer that reaches the generic policy does not spend three attempts reconfirming the first answer.",
         "unknownHttpStatus": "Anything not listed is treated as retryable — an unfamiliar status is more likely transient than permanent."
       }
     }

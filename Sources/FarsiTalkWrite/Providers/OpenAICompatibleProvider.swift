@@ -116,6 +116,18 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
             if Self.hitOutputCeiling(json) { throw ProviderError.truncated }
         }
 
+        // A safety stop is checked before the empty-text branch, because a stop
+        // with no words written looks exactly like an empty answer and the two
+        // want opposite handling: empty is final, filtered goes to the rescue
+        // engine. Gemini trips this on ordinary speech at temperature 0 — 1 of
+        // 51 dictations and 9 of 37 meeting pieces on the Mazarix site.
+        let reasons = Self.finishReasons(from: json)
+        if KernelDefaults.Rescue.isFiltered(finishReason: reasons.finish, nativeFinishReason: reasons.native) {
+            let partial = Self.extractText(from: json)
+            FTWLog.warn("Provider stopped on content (\(reasons.finish ?? "?") / \(reasons.native ?? "?")); \(partial.isEmpty ? "nothing" : "\(partial.count) characters") written before the stop.")
+            throw ProviderError.filtered(partial: partial)
+        }
+
         let text = Self.extractText(from: json)
         guard !text.isEmpty else { throw ProviderError.emptyResponse }
 
@@ -136,15 +148,21 @@ struct OpenAICompatibleProvider: TranscriptionProvider {
     /// `native_finish_reason`, which on Gemini is "MAX_TOKENS". A server that
     /// reports only the native form would otherwise look like a clean stop.
     static func hitOutputCeiling(_ json: Any) -> Bool {
+        let reasons = finishReasons(from: json)
+        return [reasons.finish, reasons.native]
+            .compactMap { $0?.lowercased() }
+            .contains { $0 == "length" || $0 == "max_tokens" }
+    }
+
+    /// Both finish-reason fields of the first choice, untouched. `finish_reason`
+    /// is the OpenAI-compatible word; `native_finish_reason` is the upstream
+    /// model's own verdict passed through, and for Gemini it is the one that
+    /// actually says what happened ("MAX_TOKENS", "SAFETY").
+    static func finishReasons(from json: Any) -> (finish: String?, native: String?) {
         guard let json = json as? [String: Any],
               let choice = (json["choices"] as? [[String: Any]])?.first
-        else { return false }
-
-        let reasons = ["finish_reason", "native_finish_reason"]
-            .compactMap { choice[$0] as? String }
-            .map { $0.lowercased() }
-
-        return reasons.contains { $0 == "length" || $0 == "max_tokens" }
+        else { return (nil, nil) }
+        return (choice["finish_reason"] as? String, choice["native_finish_reason"] as? String)
     }
 
     static func extractText(from json: Any) -> String {

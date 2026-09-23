@@ -131,6 +131,11 @@
 - دکمهٔ **Test connection** وضعیت احراز هویت، اعتبار مدل، پشتیبانی از صدا، تعداد توکن و
   هزینهٔ تخمینی را به زبان ساده گزارش می‌دهد.
 - **ارائه‌دهندهٔ پشتیبان اختیاری** — اگر اصلی شکست خورد، خودکار روی دیگری تلاش می‌کند.
+- **موتور دوم وقتی اولی جواب نمی‌دهد** — فیلتر ایمنی Gemini گاهی رونویسی یک گفتار کاملاً
+  عادی را متوقف می‌کند، و فرستادن دوبارهٔ همان صدا به همان فیلتر می‌خورد. در این حالت (یا
+  وقتی پاسخ خالی برمی‌گردد، یا شبکه قطع می‌شود) همان ضبط به یک مدل مخصوص گفتار‌به‌متن روی
+  endpoint رونویسی OpenRouter فرستاده می‌شود که فیلتر ندارد. به‌جای خطا متن می‌گیرید؛ لاگ
+  می‌گوید کدام موتور پاسخ داده است.
 
 ### سرعت
 
@@ -338,6 +343,7 @@ tail -f ~/.config/farsitalkwrite/farsitalkwrite.log
    │
    ├─ TranscriptionProvider ── OpenRouter / Google
    │     timeout scaled to audio length · 3 retries · optional fallback
+   │     then a second engine if the answer was filtered or empty
    │
    ├─ transcripts/*.txt ── archived with a timestamp, whatever happens next
    │

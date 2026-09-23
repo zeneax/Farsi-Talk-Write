@@ -282,6 +282,23 @@ retries without the field if it is rejected.
 Google's own endpoint is reachable but *intermittently* faulty from some
 networks, and OpenRouter is the default because of it.
 
+**Gemini's safety filter stops ordinary speech.** `finish_reason:
+content_filter`, `native_finish_reason: SAFETY`, usually zero output tokens —
+on business dictation at temperature 0, with nothing anyone would call
+unsafe. The Mazarix site measured 1 of 51 dictations and 9 of 37 meeting
+pieces. It is not retryable (identical bytes meet the identical filter) and it
+is not the end: the same audio goes to a **second engine** on OpenRouter's
+`audio/transcriptions` endpoint, a dedicated speech-to-text model with no
+filter, no prompt and no reasoning. Which engine, on which outcomes, with which
+language hint is kernel data (`request.rescue` in `kernel/timing.json`, with
+the bake-off beside it); `ProviderRegistry.rescue` is the Swift side, and it
+is reached only after the first engine's final answer was not a transcript —
+filtered, empty, or a transport failure that outlived the retries. Truncation
+is not rescued; it has its own cure. Only OpenRouter serves the endpoint, and
+the JSON `input_audio` body is its shape, so `ProviderProfile.supportsRescue`
+gates it. `FarsiTalkWrite --test-rescue FILE` exercises the path on demand,
+since a clip that trips the filter cannot be kept to test with.
+
 Re-measured 2026-09-11 against `v1beta/models/{model}:generateContent`, which is
 a different endpoint from the `/interactions` one this app's `geminiInteractions`
 kind uses. It answers in well under a second — the earlier "accepts the request
@@ -340,13 +357,18 @@ FarsiTalkWrite --check                    # permissions, keys, device
 FarsiTalkWrite --list-devices             # inputs + sample rates
 FarsiTalkWrite --test-audio --seconds 5   # → /tmp/ftw-test.wav
 FarsiTalkWrite --test-transcribe FILE --provider openrouter
+FarsiTalkWrite --test-rescue FILE --provider openrouter   # the second engine, on its own
 FarsiTalkWrite --test-insert "سلام دنیا"
 FarsiTalkWrite --test-hotkey
 ```
 
 `BidiText` has a real suite now: `make kernel-test` runs `kernel/bidi-cases.json`
 through it, and `cd packages/web && npm test` runs the same file through the
-TypeScript port. A case that passes in one and fails in the other is the entire
+TypeScript port. The same target also runs `Tests/KernelRules`, which checks
+the generated kernel constants against each other — the retry table across
+every status 0–700, the rescue rule's two halves, the stop-reason walk — and
+`packages/web/test/rescue.test.js` checks the same things on the TypeScript
+side. A case that passes in one and fails in the other is the entire
 reason the fixture is shared rather than duplicated — two ports drift, one fixture
 cannot. Adding a case to the JSON exercises both suites with no edit to either, so
 add cases there rather than to either runner.

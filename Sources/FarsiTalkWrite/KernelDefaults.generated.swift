@@ -103,6 +103,11 @@ enum KernelDefaults {
         /// re-sends once with a raised ceiling instead, which is a different
         /// request and so can actually succeed.
         static let truncatedResponse = false
+        /// Whether a filtered stop is worth another identical attempt. It is
+        /// not — the identical bytes meet the identical filter. The same audio
+        /// goes to `Rescue.engine` instead, which is a different engine and so
+        /// can actually answer.
+        static let filteredResponse = false
 
         /// Whether an HTTP status is worth another attempt.
         static func allowsRetry(status: Int) -> Bool {
@@ -110,6 +115,47 @@ enum KernelDefaults {
             if retryableStatuses.contains(status) { return true }
             if retryableStatusRanges.contains(where: { $0.contains(status) }) { return true }
             return unknownStatus
+        }
+    }
+
+    /// The second engine, for when the first one's final answer is not a
+    /// transcript. See kernel/timing.json `request.rescue` for the bake-off
+    /// that chose it and the outcomes that send audio to it.
+    enum Rescue {
+        /// A dedicated speech-to-text model on the provider's transcription
+        /// endpoint: no safety filter, no prompt, no reasoning.
+        static let engine = "openai/gpt-4o-mini-transcribe"
+        /// Relative to the provider's API root.
+        static let endpoint = "audio/transcriptions"
+        static let attempts: Int = 2
+        /// Which final outcomes of the first engine send the audio here:
+        /// "filtered", "empty", "transport". Truncation has its own cure.
+        static let on: Set<String> = ["filtered", "empty", "transport"]
+        /// Finish reasons, either spelling, that mean the provider stopped on
+        /// content. Already lower-cased.
+        static let stopReasons: Set<String> = ["content_filter", "safety", "recitation", "blocklist", "prohibited_content", "spii"]
+        /// ISO-639-1 hint per prompt language; empty means let the engine detect.
+        static let languageHints: [String: String] = [
+            "farsi": "fa",
+            "english": "en",
+            "auto": "",
+        ]
+
+        /// Whether a chat-completions answer was stopped on content rather than
+        /// finished. Both spellings are read: `finish_reason` is the
+        /// OpenAI-compatible word, `native_finish_reason` is the upstream
+        /// model's own, and Gemini's is the one that actually arrives.
+        static func isFiltered(finishReason: String?, nativeFinishReason: String?) -> Bool {
+            [finishReason, nativeFinishReason]
+                .compactMap { $0?.lowercased() }
+                .contains { !$0.isEmpty && stopReasons.contains($0) }
+        }
+
+        /// The transcription endpoint's language field for a prompt language
+        /// ("farsi", "english", "auto"), or nil to let the engine detect.
+        static func languageHint(forLanguage language: String) -> String? {
+            guard let hint = languageHints[language], !hint.isEmpty else { return nil }
+            return hint
         }
     }
 

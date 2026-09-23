@@ -141,6 +141,10 @@ kernel-test:
 		Sources/FarsiTalkWrite/BidiText.swift Tests/BidiCases/main.swift \
 		-o $(BUILD_DIR)/bidi-cases 2>&1 | sed 's/^/  /'
 	@$(BUILD_DIR)/bidi-cases $(KERNEL_DIR)/bidi-cases.json
+	@swiftc -O -sdk $(SDK) -target $(TARGET) \
+		$(KERNEL_GEN) Tests/KernelRules/main.swift \
+		-o $(BUILD_DIR)/kernel-rules 2>&1 | sed 's/^/  /'
+	@$(BUILD_DIR)/kernel-rules
 
 build: $(BUILD_DIR)/$(APP_NAME)-bin
 
