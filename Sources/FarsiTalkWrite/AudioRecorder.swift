@@ -199,7 +199,30 @@ final class AudioRecorder {
     private var peakAmplitude: Double = 0
 
     // Retained so the tap can be rebuilt after a device reconfiguration.
-    private var reconfigureCount = 0
+    /// When the tap was last rebuilt after a configuration change, newest last.
+    /// Main-thread only, like the handler that appends to it.
+    private var reconfigureTimes: [TimeInterval] = []
+
+    /// A device is given up on only when it flaps like this: more than
+    /// `flapLimit` reconfigurations inside `flapWindowSeconds`.
+    ///
+    /// This used to be a lifetime cap of three, and three is reached in normal
+    /// use. Starting the engine on the built-in microphone reports one
+    /// configuration change every single time — 149 recordings, 149 changes in
+    /// one day's log — so one of the three was always spent before the user
+    /// said a word. And Siri pre-arms its own microphone whenever the 🌐 key
+    /// goes down (its default shortcut is 🌐 Space), which is the very key this
+    /// app triggers on; its open and its release a few seconds later can each
+    /// reconfigure the device. On 2026-09-23 that came to four changes in seven
+    /// seconds, the cap was hit, and a recording was ended and sent at 5.0s
+    /// while the user was still speaking.
+    ///
+    /// Reinstalling the tap is cheap and loses only a few milliseconds, so the
+    /// right response to a handful of changes is to keep going. Eight inside
+    /// ten seconds is not a neighbour opening the microphone; it is a device
+    /// that is broken, and the audio is already unusable by then.
+    private static let flapWindowSeconds: TimeInterval = 10
+    private static let flapLimit = 8
     private var leadInDefaultMs: Int = 150
     private var leadInBluetoothMs: Int = 350
 
@@ -239,7 +262,7 @@ final class AudioRecorder {
         sumOfSquares = 0
         framesAnalysed = 0
         peakAmplitude = 0
-        reconfigureCount = 0
+        reconfigureTimes.removeAll()
         setCurrentDevice(nil)
         pcmQueue.sync { pcm = Data() }
 
@@ -626,14 +649,18 @@ final class AudioRecorder {
             return
         }
 
-        // Only re-establish a limited number of times, so a device that flaps
-        // cannot spin here forever.
-        guard reconfigureCount < 3 else {
-            FTWLog.warn("Audio configuration changed repeatedly; finishing with what was captured.")
+        // Only give up on a device that is flapping, not on one whose neighbours
+        // are busy. See `flapLimit` for the two ordinary sources of these
+        // notifications and the recording they cost when this was a flat count.
+        let now = ProcessInfo.processInfo.systemUptime
+        reconfigureTimes.removeAll { now - $0 > Self.flapWindowSeconds }
+        guard reconfigureTimes.count < Self.flapLimit else {
+            FTWLog.warn("Audio configuration changed \(reconfigureTimes.count) times in \(Int(Self.flapWindowSeconds))s; finishing with what was captured.")
             stop(reason: .configurationChange)
             return
         }
-        reconfigureCount += 1
+        reconfigureTimes.append(now)
+        let recent = reconfigureTimes.count
 
         // Both halves are CoreAudio and both can block: asking whether the device
         // is still there is a property query, and rebuilding the tap closes and
@@ -652,7 +679,10 @@ final class AudioRecorder {
 
             do {
                 try self.reinstallTap()
-                FTWLog.info("Audio configuration changed (\(device.name)); re-established tap and continued recording.")
+                // The first one is the ordinary start-up report; a count is only
+                // worth reading once something else is reconfiguring the device.
+                let suffix = recent > 1 ? " (\(recent) in the last \(Int(Self.flapWindowSeconds))s)" : ""
+                FTWLog.info("Audio configuration changed (\(device.name)); re-established tap and continued recording\(suffix).")
             } catch {
                 FTWLog.warn("Could not re-establish audio after configuration change: \(error.localizedDescription)")
                 DispatchQueue.main.async { self.stop(reason: .configurationChange) }
@@ -676,10 +706,15 @@ final class AudioRecorder {
         converter = nil
         converterInputFormat = nil
 
-        // The link has just been renegotiated, so skip its lead-in too.
-        if let device = currentDevice {
-            let discardMs = leadInDiscardMs(isBluetooth: device.isBluetooth)
+        // A Bluetooth link has just been renegotiated, so skip its lead-in again.
+        // A wired device has nothing to negotiate, and this reinstall happens on
+        // every start (see `flapLimit`) — typically right as the user begins to
+        // speak — so discarding 150 ms here was throwing away the first syllable.
+        if let device = currentDevice, device.isBluetooth {
+            let discardMs = leadInDiscardMs(isBluetooth: true)
             framesToDiscard = Int(Self.targetSampleRate * Double(discardMs) / 1000.0)
+        } else {
+            framesToDiscard = 0
         }
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
