@@ -176,6 +176,29 @@ change. Treating it as "the device disconnected" aborted every AirPods recording
 0.0s. Check whether the device actually disappeared; if not, rebuild the tap and
 continue.
 
+**Siri listens on the 🌐 key too.** Its default keyboard shortcut is 🌐 Space,
+and macOS pre-arms `corespeechd`'s microphone the moment 🌐 goes down, in case
+Space follows — so every ⇧🌐 trigger opens the microphone twice, once for this
+app and once for Siri, which then gives up a few seconds later. It shows as a
+second microphone icon in the menu bar, and its open and release can each
+reconfigure the input device. That is harmless now, but it was not: the
+configuration-change handler used to give up after three changes ever, the
+built-in microphone already reports one on every engine start, and on
+2026-09-23 the two together ended a recording at 5.0s mid-sentence. The limit
+is a rate now (`AudioRecorder.flapLimit`). Do not put a flat count back.
+
+To see who has the microphone at any moment — this is how Siri was found —
+build `Tools/micwho.swift` and dictate while it runs:
+
+```sh
+swiftc -O -framework CoreAudio -framework AppKit Tools/micwho.swift -o /tmp/micwho
+/tmp/micwho 120
+```
+
+The "Audio configuration changed" line right after "Recording from" on the
+built-in microphone is the ordinary start-up report, not a fault; a count in
+brackets after it means something else is reconfiguring the device.
+
 **Never cache the input sample rate.** AirPods present 16/24 kHz where the built-in
 mic presents 48 kHz. A cached rate produces chipmunked or slowed audio.
 
