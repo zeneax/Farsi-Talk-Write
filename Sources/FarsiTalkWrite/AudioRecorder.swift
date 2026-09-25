@@ -46,6 +46,37 @@ final class AudioRecorder {
         }
     }
 
+    /// Two ways of opening a microphone, chosen by transport.
+    ///
+    /// `AVAudioEngine` is the original path and it stays the path for every
+    /// wired device: on the built-in microphone it has 613 recordings in one
+    /// log without a single refused start, and the user's transcripts on it are
+    /// the standard the rest of the app is measured against. Nothing here
+    /// touches it.
+    ///
+    /// Bluetooth goes through an AUHAL of our own because `AVAudioEngine`
+    /// cannot open AirPods reliably, and the reason is measured, not guessed
+    /// (`Tools/hfpprobe.swift`, 2026-09-25): on macOS `inputNode` and
+    /// `outputNode` are one AUHAL, and the format `inputNode` reports for the
+    /// AirPods was **48 kHz** on every refused start while the HAL said the
+    /// device's input stream was **24 kHz**, before and after, every time. The
+    /// AUHAL does not sample-rate-convert on the input side, so a client format
+    /// at the wrong rate is refused at `start()` with
+    /// `kAudioUnitErr_FormatNotSupported` (-10868) — 11 of 11 refusals in the
+    /// app's log carried "node reporting 48000 Hz". Whether the node believed
+    /// 48 or 24 depended on what had run before, which is why the failures
+    /// looked random. An input-only AUHAL that asks the *unit itself* for the
+    /// device's format and sets its client side from that started 3 of 3 in the
+    /// same session, in between the engine's failures.
+    ///
+    /// Two paths cost a second teardown and a second change handler. One path
+    /// would cost the built-in microphone's known-good behaviour to fix a device
+    /// it does not have a problem with.
+    private enum Capture {
+        case engine(AVAudioEngine)
+        case unit(AudioUnit)
+    }
+
     struct Recording {
         let wav: Data
         let duration: TimeInterval
@@ -126,6 +157,7 @@ final class AudioRecorder {
     /// An open slower than this is worth saying out loud in the log.
     private static let slowOpenSeconds: TimeInterval = 2
 
+
     private var _currentDevice: AudioInputDevice?
     /// The device the current recording is bound to.
     var currentDevice: AudioInputDevice? {
@@ -140,7 +172,9 @@ final class AudioRecorder {
         _currentDevice = device
     }
 
-    private var engine: AVAudioEngine?
+    /// Which of the two capture paths this recording is on. Chosen per
+    /// transport in `bringUpEngine`; see `Capture` for why there are two.
+    private var capture: Capture?
     private var converter: AVAudioConverter?
     /// The format the current converter was built for, so we can tell when the
     /// hardware has switched under us and rebuild.
@@ -152,7 +186,13 @@ final class AudioRecorder {
 
     private var startedAt: Date?
     private var tickTimer: Timer?
+    /// AVAudioEngine path: the `AVAudioEngineConfigurationChange` observer.
     private var configObserver: NSObjectProtocol?
+    /// AUHAL path: the HAL property listeners on the device, removed with it.
+    private var deviceListeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    /// AUHAL path: one buffer, sized to the unit's maximum slice at bring-up and
+    /// refilled by every render — the IO thread never allocates.
+    private var renderBuffer: AVAudioPCMBuffer?
 
     /// Every CoreAudio call the engine makes runs here, never on the caller's
     /// thread. Serial on purpose: it is also what guarantees one engine is fully
@@ -306,49 +346,15 @@ final class AudioRecorder {
         }
         self.targetFormat = targetFormat
 
-        let engine = AVAudioEngine()
-
-        // Touching inputNode instantiates the AUHAL; the device must be bound
-        // before the format is read or the engine is started.
-        let inputNode = engine.inputNode
-        try bind(device: device, to: inputNode)
-
-        // The converter is built lazily from the first buffer's own format rather
-        // than from a format read off the node here. Binding a specific input
-        // device leaves the node briefly reporting a stale format, and handing a
-        // mismatched format to installTap raises an Objective-C exception — which
-        // Swift cannot catch, so it terminates the whole app. Letting the buffers
-        // declare their format removes that failure mode entirely.
-        converter = nil
-        converterInputFormat = nil
-
         // Bluetooth (HFP) links emit silence or noise while the codec negotiates.
         let discardMs = settings.leadInDiscard(isBluetooth: device.isBluetooth)
         framesToDiscard = Int(Self.targetSampleRate * Double(discardMs) / 1000.0)
 
-        // Registered before the stream opens: on Bluetooth the HFP switch is
-        // reported within milliseconds of it opening, and an observer added a
-        // main-queue hop later would miss it.
-        observeConfigurationChanges(on: engine)
-
-        // format: nil means "whatever this node is actually producing". Passing an
-        // explicit format here is what raised the uncatchable ObjC exception.
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
-            self?.process(buffer: buffer)
+        if device.isBluetooth {
+            capture = .unit(try buildAndStartUnit(device: device))
+        } else {
+            capture = .engine(try buildAndStartEngine(device: device, discardMs: discardMs))
         }
-
-        isCapturing = true
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            isCapturing = false
-            inputNode.removeTap(onBus: 0)
-            removeConfigurationObserver()
-            throw RecorderError.engineFailed(error.localizedDescription)
-        }
-
-        self.engine = engine
 
         // What CoreAudio actually cost, every single time.
         //
@@ -370,6 +376,220 @@ final class AudioRecorder {
             FTWLog.warn("Opening \(device.name) took \(opened)s. CoreAudio was slow, not the app — but the recording began that late, so anything said before the start cue was not captured.")
         }
         return device
+    }
+
+    /// One engine, built from nothing and started, on `engineQueue`. A failure
+    /// leaves nothing behind: the tap is removed, the observer is gone, and the
+    /// unreturned engine is dropped, which tears the AUHAL down.
+    private func buildAndStartEngine(
+        device: AudioInputDevice, discardMs: Int
+    ) throws -> AVAudioEngine {
+        let engine = AVAudioEngine()
+
+        // Touching inputNode instantiates the AUHAL; the device must be bound
+        // before the format is read or the engine is started.
+        let inputNode = engine.inputNode
+        try bind(device: device, to: inputNode)
+
+        // The converter is built lazily from the first buffer's own format rather
+        // than from a format read off the node here. Binding a specific input
+        // device leaves the node briefly reporting a stale format, and handing a
+        // mismatched format to installTap raises an Objective-C exception — which
+        // Swift cannot catch, so it terminates the whole app. Letting the buffers
+        // declare their format removes that failure mode entirely.
+        converter = nil
+        converterInputFormat = nil
+
+        // Bluetooth (HFP) links emit silence or noise while the codec negotiates.
+        framesToDiscard = Int(Self.targetSampleRate * Double(discardMs) / 1000.0)
+
+        // Registered before the stream opens: on Bluetooth the HFP switch is
+        // reported within milliseconds of it opening, and an observer added a
+        // main-queue hop later would miss it.
+        observeConfigurationChanges(on: engine)
+
+        // format: nil means "whatever this node is actually producing". Passing an
+        // explicit format here is what raised the uncatchable ObjC exception.
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
+            self?.process(buffer: buffer)
+        }
+
+        isCapturing = true
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            isCapturing = false
+            inputNode.removeTap(onBus: 0)
+            removeConfigurationObserver()
+            // What the node believed the device's format was, against what the
+            // HAL will report it as once the stream is open. On AirPods these
+            // disagree on every other trigger (-10868); this line is the
+            // evidence. See Tools/hfpprobe.swift.
+            let believed = inputNode.outputFormat(forBus: 0)
+            FTWLog.warn(String(
+                format: "engine.start() refused %@ with the node reporting %.0f Hz, %u ch: %@",
+                device.name, believed.sampleRate, believed.channelCount, error.localizedDescription
+            ))
+            throw RecorderError.engineFailed(error.localizedDescription)
+        }
+        return engine
+    }
+
+    /// The Bluetooth path: an AUHAL with its output side off and its client
+    /// format taken from the unit's own reading of the device, at this instant.
+    /// See `Capture` for the measurement this rests on. On `engineQueue`.
+    private func buildAndStartUnit(device: AudioInputDevice) throws -> AudioUnit {
+        var description = AudioComponentDescription(
+            componentType: kAudioUnitType_Output,
+            componentSubType: kAudioUnitSubType_HALOutput,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0, componentFlagsMask: 0
+        )
+        guard let component = AudioComponentFindNext(nil, &description) else {
+            throw RecorderError.engineFailed("the system has no HAL output unit")
+        }
+        var instance: AudioUnit?
+        try check(AudioComponentInstanceNew(component, &instance), "creating the audio unit")
+        guard let unit = instance else { throw RecorderError.engineFailed("no audio unit instance") }
+
+        // Anything below that throws must not leave a half-built unit behind.
+        var succeeded = false
+        defer { if !succeeded { AudioComponentInstanceDispose(unit) } }
+
+        // Input on element 1, output off on element 0 — before the device is
+        // set, as the AUHAL requires. Output off is the point: the unit then has
+        // no output side whose format could disagree with anything.
+        var on: UInt32 = 1
+        var off: UInt32 = 0
+        let flag = UInt32(MemoryLayout<UInt32>.size)
+        try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &on, flag), "enabling input")
+        try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &off, flag), "disabling output")
+
+        var deviceID = device.id
+        try check(AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+            &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size)
+        ), "binding \(device.name)")
+
+        let clientFormat = try applyDeviceFormat(to: unit, device: device)
+
+        var callback = AURenderCallbackStruct(
+            inputProc: audioUnitInputCallback,
+            inputProcRefCon: Unmanaged.passUnretained(self).toOpaque()
+        )
+        try check(AudioUnitSetProperty(
+            unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0,
+            &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)
+        ), "installing the input callback")
+
+        try check(AudioUnitInitialize(unit), "initialising the audio unit")
+
+        var maxFrames: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, &size)
+        renderBuffer = AVAudioPCMBuffer(pcmFormat: clientFormat, frameCapacity: max(maxFrames, 4096))
+
+        converter = nil
+        converterInputFormat = nil
+        listenToDevice(device)
+
+        isCapturing = true
+        do {
+            try check(AudioOutputUnitStart(unit), "starting the audio unit")
+        } catch {
+            isCapturing = false
+            stopListeningToDevice()
+            AudioUnitUninitialize(unit)
+            throw error
+        }
+        succeeded = true
+        return unit
+    }
+
+    /// Asks the unit what the device delivers on its input side and sets the
+    /// client side to the same rate and channel count, standard float. The unit
+    /// reads that from the HAL right now, which is the whole difference from
+    /// `AVAudioEngine.inputNode`. Returns the client format, for the buffer.
+    @discardableResult
+    private func applyDeviceFormat(to unit: AudioUnit, device: AudioInputDevice) throws -> AVAudioFormat {
+        var deviceFormat = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        try check(AudioUnitGetProperty(
+            unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1, &deviceFormat, &size
+        ), "reading \(device.name)'s format")
+        guard deviceFormat.mSampleRate > 0, deviceFormat.mChannelsPerFrame > 0,
+              let clientFormat = AVAudioFormat(
+                  standardFormatWithSampleRate: deviceFormat.mSampleRate,
+                  channels: deviceFormat.mChannelsPerFrame
+              )
+        else {
+            throw RecorderError.formatUnavailable
+        }
+        var asbd = clientFormat.streamDescription.pointee
+        try check(AudioUnitSetProperty(
+            unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1,
+            &asbd, UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        ), "setting the client format")
+        FTWLog.info("\(device.name) reports \(Int(deviceFormat.mSampleRate)) Hz, \(deviceFormat.mChannelsPerFrame) ch; client format set to match")
+        return clientFormat
+    }
+
+    private func check(_ status: OSStatus, _ what: String) throws {
+        guard status != noErr else { return }
+        throw RecorderError.engineFailed("\(what) failed (OSStatus \(status))")
+    }
+
+    /// Called by the AUHAL on its IO thread with every slice it captured. Pulls
+    /// the slice into `renderBuffer` and hands it to the same `process(buffer:)`
+    /// the engine path uses.
+    fileprivate func render(
+        flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
+        timestamp: UnsafePointer<AudioTimeStamp>,
+        bus: UInt32, frames: UInt32
+    ) -> OSStatus {
+        guard isCapturing, case .unit(let unit)? = capture, let buffer = renderBuffer,
+              frames <= buffer.frameCapacity else { return noErr }
+        buffer.frameLength = frames
+        let status = AudioUnitRender(unit, flags, timestamp, bus, frames, buffer.mutableAudioBufferList)
+        guard status == noErr else { return status }
+        process(buffer: buffer)
+        return noErr
+    }
+
+    /// The HAL tells this recorder, on `engineQueue`, when the device changes
+    /// rate or channel layout or disappears. The AUHAL path's equivalent of
+    /// `observeConfigurationChanges`.
+    private func listenToDevice(_ device: AudioInputDevice) {
+        stopListeningToDevice()
+        let selectors: [(AudioObjectPropertySelector, AudioObjectPropertyScope)] = [
+            (kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal),
+            (kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput),
+            (kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal),
+        ]
+        for (selector, scope) in selectors {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                guard let self, self.isCapturing else { return }
+                DispatchQueue.main.async { self.handleConfigurationChange() }
+            }
+            if AudioObjectAddPropertyListenerBlock(device.id, &address, engineQueue, block) == noErr {
+                deviceListeners.append((address, block))
+            }
+        }
+        listenedDeviceID = device.id
+    }
+
+    private var listenedDeviceID: AudioDeviceID?
+
+    private func stopListeningToDevice() {
+        guard let id = listenedDeviceID else { return }
+        for (address, block) in deviceListeners {
+            var address = address
+            AudioObjectRemovePropertyListenerBlock(id, &address, engineQueue, block)
+        }
+        deviceListeners.removeAll()
+        listenedDeviceID = nil
     }
 
     /// Back on the main queue with whatever the engine queue managed.
@@ -475,13 +695,24 @@ final class AudioRecorder {
     /// engine queue too. The engine is captured here rather than read there: by
     /// the time the block runs, `self.engine` is already the next recording's.
     private func discardEngine() {
-        guard let engine else { return }
-        self.engine = nil
+        guard let capture else { return }
+        self.capture = nil
         converter = nil
         converterInputFormat = nil
-        engineQueue.async {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        switch capture {
+        case .engine(let engine):
+            engineQueue.async {
+                engine.inputNode.removeTap(onBus: 0)
+                engine.stop()
+            }
+        case .unit(let unit):
+            engineQueue.async { [weak self] in
+                self?.stopListeningToDevice()
+                AudioOutputUnitStop(unit)
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+                self?.renderBuffer = nil
+            }
         }
     }
 
@@ -678,7 +909,11 @@ final class AudioRecorder {
             }
 
             do {
-                try self.reinstallTap()
+                switch self.capture {
+                case .engine?: try self.reinstallTap()
+                case .unit?: try self.renegotiateFormat()
+                case nil: return
+                }
                 // The first one is the ordinary start-up report; a count is only
                 // worth reading once something else is reconfiguring the device.
                 let suffix = recent > 1 ? " (\(recent) in the last \(Int(Self.flapWindowSeconds))s)" : ""
@@ -695,7 +930,7 @@ final class AudioRecorder {
     /// On `engineQueue`, like everything else that touches the engine.
     private func reinstallTap() throws {
         // The recording ended while this was queued behind the bring-up.
-        guard isCapturing, let engine else { return }
+        guard isCapturing, case .engine(let engine)? = capture else { return }
 
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
@@ -723,6 +958,28 @@ final class AudioRecorder {
 
         engine.prepare()
         try engine.start()
+    }
+
+    /// The AUHAL path's `reinstallTap`: the device changed rate or layout under
+    /// a live unit. The unit is stopped and re-initialised around a fresh read
+    /// of the device's format, but never disposed — that is what keeps the
+    /// Bluetooth link in voice mode while it settles, instead of releasing it and
+    /// starting the whole negotiation again. On `engineQueue`.
+    private func renegotiateFormat() throws {
+        guard isCapturing, case .unit(let unit)? = capture, let device = currentDevice else { return }
+        AudioOutputUnitStop(unit)
+        AudioUnitUninitialize(unit)
+        converter = nil
+        converterInputFormat = nil
+        let clientFormat = try applyDeviceFormat(to: unit, device: device)
+        try check(AudioUnitInitialize(unit), "re-initialising the audio unit")
+        var maxFrames: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioUnitGetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, &size)
+        renderBuffer = AVAudioPCMBuffer(pcmFormat: clientFormat, frameCapacity: max(maxFrames, 4096))
+        let discardMs = leadInDiscardMs(isBluetooth: true)
+        framesToDiscard = Int(Self.targetSampleRate * Double(discardMs) / 1000.0)
+        try check(AudioOutputUnitStart(unit), "restarting the audio unit")
     }
 
     private func onMain(_ block: @escaping () -> Void) {
@@ -759,4 +1016,18 @@ final class AudioRecorder {
 
         return data
     }
+}
+
+/// The AUHAL's input callback. C-convention, so it cannot capture anything; the
+/// recorder rides in `refCon`. See `AudioRecorder.render`.
+private func audioUnitInputCallback(
+    refCon: UnsafeMutableRawPointer,
+    flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
+    timestamp: UnsafePointer<AudioTimeStamp>,
+    bus: UInt32,
+    frames: UInt32,
+    ioData: UnsafeMutablePointer<AudioBufferList>?
+) -> OSStatus {
+    let recorder = Unmanaged<AudioRecorder>.fromOpaque(refCon).takeUnretainedValue()
+    return recorder.render(flags: flags, timestamp: timestamp, bus: bus, frames: frames)
 }

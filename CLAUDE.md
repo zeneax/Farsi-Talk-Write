@@ -72,7 +72,7 @@ trigger ─→ DictationController ─→ AudioRecorder ─→ ProviderRegistry 
 | File | Role |
 |---|---|
 | `DictationController` | The state machine. Owns `destination` (cursor vs the Setup Guide's practice field) and the pending-recording queue. |
-| `AudioRecorder` | AVAudioEngine → 16 kHz mono Int16 WAV. Silence/cap/manual stop conditions. |
+| `AudioRecorder` | AVAudioEngine (wired) or an input-only AUHAL (Bluetooth) → 16 kHz mono Int16 WAV. Silence/cap/manual stop conditions. |
 | `AudioDeviceManager` | CoreAudio enumeration, transport detection, AirPods "prefer when available". |
 | `Providers/` | `TranscriptionProvider` protocol + two wire formats. Adding a provider is normally config, not code. |
 | `BidiText` | Unicode isolation for mixed Farsi/Latin text. |
@@ -198,6 +198,43 @@ swiftc -O -framework CoreAudio -framework AppKit Tools/micwho.swift -o /tmp/micw
 The "Audio configuration changed" line right after "Recording from" on the
 built-in microphone is the ordinary start-up report, not a fault; a count in
 brackets after it means something else is reconfiguring the device.
+
+**AVAudioEngine cannot open AirPods reliably, so Bluetooth does not use it.**
+The failure is `-10868` (`kAudioUnitErr_FormatNotSupported`) at `engine.start()`,
+and it is measured, not guessed (2026-09-25, `Tools/hfpprobe.swift`): on macOS
+`inputNode` and `outputNode` are **one AUHAL**, and the format `inputNode`
+reported for the AirPods was **48 kHz** on every refused start while the HAL
+said the device's input stream was **24 kHz** — before, after, every time. The
+AUHAL does not sample-rate-convert on the input side, so a client format at the
+wrong rate is refused. 11 of 11 refusals in the app's log said "node reporting
+48000 Hz"; whether the node believed 48 or 24 depended on what had run before,
+which is why the failures looked random, and the built-in microphone never
+failed once in 613 recordings because its rate never changes. An input-only
+AUHAL that asks the *unit itself* for the device's format started 3 of 3 in the
+same session, in between the engine's failures.
+
+So `AudioRecorder.Capture` has two paths, chosen by transport. Wired devices
+stay on `AVAudioEngine`, untouched — the built-in microphone is the standard
+the rest of the app is measured against and it was explicitly asked to stay
+that way. Bluetooth goes through `buildAndStartUnit`: output side off, client
+format read from the unit at that instant, and a device change re-initialises
+the unit around a fresh read **without disposing it**, which keeps the link in
+voice mode instead of releasing it and starting the negotiation over. It is
+not retried: a refused start is evidence, and the log now says what the node
+believed on the engine path:
+
+```sh
+grep -E "engine.start\(\) refused|reports .* Hz" ~/.config/farsitalkwrite/farsitalkwrite.log
+```
+
+`hfpprobe` also showed that merely touching `engine.outputNode` enables the
+shared unit's output side and fails `start()` with `'!dev'` on a device that
+has no output stream. Never touch it in the capture path.
+
+```sh
+swiftc -O -framework CoreAudio -framework AVFoundation Tools/hfpprobe.swift -o /tmp/hfpprobe
+/tmp/hfpprobe AirPods
+```
 
 **Never cache the input sample rate.** AirPods present 16/24 kHz where the built-in
 mic presents 48 kHz. A cached rate produces chipmunked or slowed audio.
