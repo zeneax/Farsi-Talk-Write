@@ -42,6 +42,7 @@ enum KernelDefaults {
         /// hotter and noisier than a built-in mic, so one global value does not
         /// work — this is the fallback, not the answer.
         static let silenceThresholdDb: Double = -45.0
+        static let silenceThresholdBluetoothDb: Double = -55.0
         /// A Bluetooth (HFP) link needs time to negotiate; without discarding the
         /// lead-in the first syllable is noise.
         static let leadInDefaultMs: Int = 150

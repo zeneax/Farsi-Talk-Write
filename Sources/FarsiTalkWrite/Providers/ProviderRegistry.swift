@@ -231,7 +231,7 @@ enum ProviderRegistry {
             wav: wav,
             targetSeconds: config.recording.chunkTargetSeconds,
             maxSeconds: config.recording.chunkMaxSeconds,
-            silenceThresholdDb: config.recording.silenceThreshold(forDeviceUID: nil)
+            silenceThresholdDb: config.recording.silenceThreshold(forDeviceUID: nil, isBluetooth: false)
         )
 
         // Short recording: one request, full context, best possible accuracy.

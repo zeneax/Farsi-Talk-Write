@@ -329,7 +329,7 @@ final class AudioRecorder {
         }
         setCurrentDevice(device)
 
-        silenceThresholdDb = settings.silenceThreshold(forDeviceUID: device.uid)
+        silenceThresholdDb = settings.silenceThreshold(forDeviceUID: device.uid, isBluetooth: device.isBluetooth)
         silenceStopSeconds = settings.silenceStopSeconds
         minSpeechSeconds = settings.minSpeechSeconds
         maxSeconds = settings.maxSeconds

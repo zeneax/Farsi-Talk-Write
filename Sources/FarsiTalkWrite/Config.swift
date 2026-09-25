@@ -167,8 +167,14 @@ struct RecordingConfig: Codable {
     /// and noisier than the built-in mic, so one global threshold does not work.
     var silenceThresholdDb: [String: Double] = ["default": KernelDefaults.Recording.silenceThresholdDb]
 
-    func silenceThreshold(forDeviceUID uid: String?) -> Double {
+    /// The device's own entry wins; a Bluetooth device with none falls back to
+    /// the transport entry, because a headset in voice mode is a different
+    /// microphone from anything wired (see the kernel note); then `default`.
+    func silenceThreshold(forDeviceUID uid: String?, isBluetooth: Bool) -> Double {
         if let uid, let v = silenceThresholdDb[uid] { return v }
+        if isBluetooth {
+            return silenceThresholdDb["bluetooth"] ?? KernelDefaults.Recording.silenceThresholdBluetoothDb
+        }
         return silenceThresholdDb["default"] ?? KernelDefaults.Recording.silenceThresholdDb
     }
 
