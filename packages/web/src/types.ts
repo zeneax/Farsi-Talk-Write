@@ -44,7 +44,9 @@ export interface RecordingTiming {
    */
   readonly silenceThresholdDb: {
     readonly default: number;
-    readonly [deviceId: string]: number;
+    /** For any Bluetooth input with no entry of its own. Lower: HFP speech is quiet. */
+    readonly bluetooth: number;
+    readonly [deviceIdOrTransport: string]: number;
   };
   /** Lead-in to discard, per transport. Bluetooth (HFP) needs longer. */
   readonly leadInDiscardMs: {

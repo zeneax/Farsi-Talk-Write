@@ -117,17 +117,28 @@ export function seemsSilent(peakDb: number, meanDb: number): boolean {
 }
 
 /**
- * The silence threshold for a capture device, falling back to `default`.
+ * The silence threshold for a capture device: the device's own entry, then
+ * its transport's, then `default`.
  *
- * Per device, not global: AirPods run hotter and noisier than a built-in mic.
- * A consumer with no device identity passes nothing and gets the default.
+ * The transport matters more than the device. A headset in Bluetooth voice
+ * mode delivers speech far quieter than a wired microphone — AirPods measured
+ * 2026-09-25 at -38 to -47 dBFS mean during speech against -34 on a MacBook
+ * microphone — and at the -45 default the dip between syllables read as
+ * silence and ended dictations mid-sentence. Pass `"bluetooth"` for any
+ * Bluetooth input; the kernel's entry for it is the cure. A consumer with no
+ * device identity and no transport passes nothing and gets the default.
  */
-export function silenceThresholdDb(deviceId?: string): number {
+export function silenceThresholdDb(deviceId?: string, transport?: string): number {
+  const table = timing.recording.silenceThresholdDb;
   if (deviceId !== undefined) {
-    const specific = timing.recording.silenceThresholdDb[deviceId];
+    const specific = table[deviceId];
     if (specific !== undefined) return specific;
   }
-  return timing.recording.silenceThresholdDb.default;
+  if (transport !== undefined) {
+    const byTransport = table[transport];
+    if (byTransport !== undefined) return byTransport;
+  }
+  return table.default;
 }
 
 /**
