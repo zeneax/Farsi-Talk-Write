@@ -473,8 +473,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource, N
         silenceStopField.stringValue = String(config.recording.silenceStopSeconds)
         minSpeechField.stringValue = String(config.recording.minSpeechSeconds)
 
-        let uid = currentDeviceUID
-        let threshold = config.recording.silenceThreshold(forDeviceUID: uid)
+        let device = AudioDeviceManager.resolveInputDevice(config.recording.inputDevice)
+        let threshold = config.recording.silenceThreshold(
+            forDeviceUID: device?.uid, isBluetooth: device?.isBluetooth ?? false
+        )
         thresholdSlider.doubleValue = threshold
         thresholdLabel.stringValue = String(format: "%.0f dBFS", threshold)
         meterView.threshold = Float(threshold)

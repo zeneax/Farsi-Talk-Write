@@ -164,6 +164,7 @@ let maxSeconds = double(timing, "recording.maxSeconds", file: timingFile)
 let silenceStopSeconds = double(timing, "recording.silenceStopSeconds", file: timingFile)
 let minSpeechSeconds = double(timing, "recording.minSpeechSeconds", file: timingFile)
 let silenceThresholdDb = double(timing, "recording.silenceThresholdDb.default", file: timingFile)
+let silenceThresholdBluetoothDb = double(timing, "recording.silenceThresholdDb.bluetooth", file: timingFile)
 let leadInDefaultMs = int(timing, "recording.leadInDiscardMs.default", file: timingFile)
 let leadInBluetoothMs = int(timing, "recording.leadInDiscardMs.bluetooth", file: timingFile)
 let silenceGatePeakDb = double(timing, "recording.silenceGate.peakDb", file: timingFile)
@@ -260,6 +261,7 @@ enum KernelDefaults {
         /// hotter and noisier than a built-in mic, so one global value does not
         /// work — this is the fallback, not the answer.
         static let silenceThresholdDb: Double = \(number(silenceThresholdDb))
+        static let silenceThresholdBluetoothDb: Double = \(number(silenceThresholdBluetoothDb))
         /// A Bluetooth (HFP) link needs time to negotiate; without discarding the
         /// lead-in the first syllable is noise.
         static let leadInDefaultMs: Int = \(leadInDefaultMs)

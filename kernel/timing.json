@@ -8,7 +8,8 @@
     "minSpeechSeconds": 0.8,
 
     "silenceThresholdDb": {
-      "default": -45
+      "default": -45,
+      "bluetooth": -55
     },
 
     "leadInDiscardMs": {
@@ -24,7 +25,7 @@
     "notes": {
       "silenceStopSeconds": "How long a pause ends a recording. This is dead air the user sits through after every sentence, before the request is even sent, so it is tuned as short as it can be without clipping someone who pauses mid-thought.",
       "minSpeechSeconds": "Silence-stop arms only after this much speech has been heard, so the pause before you start talking cannot end the recording immediately.",
-      "silenceThresholdDb": "Per device, not global. Keyed by capture-device identifier with a required 'default' entry. AirPods run hotter and noisier than a built-in mic, so one global threshold does not work. A consumer with no device identity uses 'default'.",
+      "silenceThresholdDb": "Per device, not global. Keyed by capture-device identifier with a required 'default' entry; a device with no entry of its own falls back to its transport's entry ('bluetooth') and then to 'default'. Bluetooth is lower because a headset in HFP voice mode delivers speech far quieter than a built-in microphone — AirPods measured 2026-09-25 at -38 to -47 dBFS mean during speech, with the room at -65 to -70, against -34 on the MacBook microphone; at the -45 default, syllable dips read as silence and 2 of 7 dictations ended mid-sentence. -55 sits between the quietest speech and the floor. A consumer with no device identity uses 'default'.",
       "leadInDiscardMs": "Discarded per transport. A Bluetooth (HFP) link needs roughly 350ms to negotiate versus roughly 150ms wired; without discarding it the first syllable is noise.",
       "silenceGate": "Silence is decided locally, before anything is uploaded: a clip counts as silent when peak is below peakDb AND mean is below meanDb. This used to be left to the model, which answered 200-with-empty and cost a retry round trip to reconfirm. Deciding here is instant and free."
     }

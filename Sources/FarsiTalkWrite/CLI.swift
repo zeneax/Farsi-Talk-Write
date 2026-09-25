@@ -197,7 +197,7 @@ enum CLI {
             Term.out("      transport   \(device.transport.label)\(device.isBluetooth ? "  (needs lead-in discard)" : "")")
             Term.out("      rate        \(Int(device.sampleRate)) Hz")
             Term.out("      uid         \(device.uid)")
-            let threshold = config.recording.silenceThreshold(forDeviceUID: device.uid)
+            let threshold = config.recording.silenceThreshold(forDeviceUID: device.uid, isBluetooth: device.isBluetooth)
             Term.out("      threshold   \(Int(threshold)) dBFS")
             Term.out()
         }
