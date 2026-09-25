@@ -159,8 +159,12 @@ knowing before you build on them:
 - **Silence is decided locally**, before anything is uploaded:
   `seemsSilent(peakDb, meanDb)`. The alternative was paying a round trip for a
   provider to tell you the room was quiet.
-- **Silence threshold is per device.** `silenceThresholdDb(deviceId?)` falls
-  back to `default`. AirPods run hotter and noisier than a built-in mic.
+- **Silence threshold is per device, then per transport.**
+  `silenceThresholdDb(deviceId?, transport?)` resolves the device's own entry,
+  then the transport's, then `default`. Pass `"bluetooth"` for any Bluetooth
+  input: a headset in voice mode delivers speech 10–15 dB quieter than a wired
+  microphone, and at the default threshold the dip between syllables reads as
+  silence and ends a dictation mid-sentence. Measured on AirPods, 2026-09-25.
 
 The raw JSON is exported too, if you would rather read it than import it:
 
