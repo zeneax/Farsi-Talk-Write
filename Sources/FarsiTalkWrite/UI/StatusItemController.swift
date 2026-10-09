@@ -196,6 +196,9 @@ final class StatusItemController {
         case .noSpeech:
             symbol = "mic.slash"
             tint = .systemOrange
+        case .cancelled:
+            symbol = "xmark.circle"
+            tint = nil
         case .failed:
             symbol = "exclamationmark.triangle.fill"
             tint = .systemRed
@@ -254,7 +257,8 @@ final class StatusItemController {
         menu.addItem(.separator())
 
         let toggle = NSMenuItem(
-            title: state.isRecording ? "Stop Recording" : "Start Recording",
+            title: state.isRecording ? "Stop Recording"
+                : state.isTranscribing ? "Cancel Sending" : "Start Recording",
             action: #selector(menuToggle), keyEquivalent: ""
         )
         toggle.target = self
@@ -319,6 +323,8 @@ final class StatusItemController {
             return "Copied to clipboard — ⌘V to paste"
         case .noSpeech:
             return "No speech heard — nothing sent"
+        case .cancelled:
+            return "Cancelled — recording kept in Recordings"
         case .failed(let why):
             return "Error: \(why.prefix(60))"
         }

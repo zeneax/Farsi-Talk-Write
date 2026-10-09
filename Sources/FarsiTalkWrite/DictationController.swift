@@ -65,11 +65,21 @@ final class DictationController {
         /// otherwise be invisible, and "nothing happened" is indistinguishable
         /// from a trigger that never fired.
         case noSpeech
+        /// The person stopped a transcription that was taking too long. The
+        /// recording is still in `pending/`, so this is not a loss.
+        case cancelled
         case failed(String)
 
         var isRecording: Bool {
             if case .recording = self { return true }
             return false
+        }
+
+        var isTranscribing: Bool {
+            switch self {
+            case .transcribing, .transcribingChunks: return true
+            default: return false
+            }
         }
 
         var isBusy: Bool {
@@ -141,6 +151,14 @@ final class DictationController {
     // MARK: - Public control
 
     func start() {
+        // The trigger used to be ignored here, which left no way out of a
+        // transcription stuck in retries: "Retrying 3/3… 140s" and nothing to do
+        // but wait. Every trigger path (hotkey, Dock, menu bar) arrives here, so
+        // pressing it again is the cancel.
+        if state.isTranscribing {
+            cancelTranscription()
+            return
+        }
         guard !state.isBusy else {
             FTWLog.info("Ignoring trigger — already \(state.isRecording ? "recording" : "transcribing").")
             return
@@ -181,6 +199,26 @@ final class DictationController {
 
     func toggle() {
         if state.isRecording { stop() } else { start() }
+    }
+
+    /// The in-flight transcription, kept so it can be cancelled.
+    private var transcription: Task<Void, Never>?
+
+    /// Stops a transcription and returns to idle. The recording stays in
+    /// `pending/` (it is only deleted after delivery), so it can be re-sent
+    /// from Recordings once the network or the provider recovers.
+    func cancelTranscription() {
+        guard state.isTranscribing else { return }
+        FTWLog.info("Transcription cancelled by the user; the recording stays in pending/.")
+        transcription?.cancel()
+        transcription = nil
+        inFlightRecording = nil
+        endTranscribing()
+        state = .cancelled
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if case .cancelled = self.state { self.state = .idle }
+        }
     }
 
     /// Re-installs the event tap after a trigger-mode or key-code change.
@@ -288,13 +326,16 @@ final class DictationController {
         beginTranscribing()
         let config = self.config
 
-        Task { @MainActor in
+        transcription = Task { @MainActor in
             do {
                 let result = try await ProviderRegistry.transcribeChunked(
                     wav: recording.wav, config: config,
                     onProgress: { @Sendable [weak self] done, total in
                         Task { @MainActor in
-                            self?.state = .transcribingChunks(done: done, of: total)
+                            // A piece finishing after a cancel must not bring
+                            // the "sending" HUD back.
+                            guard let self, self.state.isTranscribing else { return }
+                            self.state = .transcribingChunks(done: done, of: total)
                         }
                     },
                     onAttempt: { @Sendable [weak self] attempt, total in
@@ -304,6 +345,9 @@ final class DictationController {
                         }
                     }
                 )
+                // An answer that lands after Cancel is not pasted: the person has
+                // moved on, and the recording is still in Recordings.
+                guard !Task.isCancelled else { return }
                 let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 guard !text.isEmpty else {
@@ -321,6 +365,7 @@ final class DictationController {
                     self.state = .inserted
                 case .cursor, .clipboard:
                     await self.tracker.restore()
+                    guard !Task.isCancelled else { return }
                     self.deliver(text, config: config, model: result.model)
                 }
                 // Delivered successfully, so the saved copy is no longer needed.
@@ -334,6 +379,8 @@ final class DictationController {
                 }
 
             } catch {
+                // Cancelled: `cancelTranscription` has already said so.
+                guard !Task.isCancelled else { return }
                 self.fail(with: error)
             }
         }
@@ -526,13 +573,16 @@ final class DictationController {
         beginTranscribing()
 
         let config = self.config
-        Task { @MainActor in
+        transcription = Task { @MainActor in
             do {
                 let result = try await ProviderRegistry.transcribeChunked(
                     wav: wav, config: config,
                     onProgress: { @Sendable [weak self] done, total in
                         Task { @MainActor in
-                            self?.state = .transcribingChunks(done: done, of: total)
+                            // A piece finishing after a cancel must not bring
+                            // the "sending" HUD back.
+                            guard let self, self.state.isTranscribing else { return }
+                            self.state = .transcribingChunks(done: done, of: total)
                         }
                     },
                     onAttempt: { @Sendable [weak self] attempt, total in
@@ -542,6 +592,9 @@ final class DictationController {
                         }
                     }
                 )
+                // An answer that lands after Cancel is not pasted: the person has
+                // moved on, and the recording is still in Recordings.
+                guard !Task.isCancelled else { return }
                 let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else {
                     self.state = .idle
@@ -550,6 +603,7 @@ final class DictationController {
                 FTWLog.info("Saved-recording transcript ready: \(text.count) characters; delivering to \(self.destination)")
                 self.onTranscript?(text)
                 await self.tracker.restore()
+                guard !Task.isCancelled else { return }
                 self.deliver(text, config: config, model: result.model)
                 self.clearRetry()
                 FTWLog.info("Delivery finished — state \(self.state)")
@@ -557,6 +611,8 @@ final class DictationController {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 if case .inserted = self.state { self.state = .idle }
             } catch {
+                // Cancelled: `cancelTranscription` has already said so.
+                guard !Task.isCancelled else { return }
                 self.fail(with: error)
             }
         }

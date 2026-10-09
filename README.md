@@ -44,6 +44,8 @@ All three are addressed here.
 - **Retargetable key** — 🌐 by default, or Right ⌘ / Right ⌥ / any modifier.
 - **Three stop conditions** — press again, stop talking (2.5s of silence), or hit
   the 60-second cap. It can never get stuck recording.
+- **Cancel a slow send** — press the trigger again while it is sending or
+  retrying. The recording is kept, so it can be re-sent from Recordings.
 - **Inserts wherever your cursor is.** Remembers which app was frontmost when the
   trigger fired and restores focus before pasting, so clicking a menu never sends
   your text to the wrong window.

@@ -81,6 +81,8 @@ final class RecordingHUD {
         case .noSpeech:
             // Long enough to read, short enough not to nag after a mis-trigger.
             hide(after: 1.8)
+        case .cancelled:
+            hide(after: 2.5)
         case .recording, .transcribing, .transcribingChunks:
             break
         }
@@ -181,15 +183,19 @@ private final class HUDContentView: NSView {
             startPulse()
         case .transcribingChunks(let done, let total):
             stage = .transcribing
-            message = "Sending \(total) parts · \(done)/\(total) done"
+            message = "Sending \(total) parts · \(done)/\(total) done\n\(Self.cancelHint)"
             startPulse()
         case .transcribing(let attempt, let total, let elapsed):
             stage = .transcribing
             let clock = String(format: "%.0fs", elapsed)
-            message = attempt == 1
+            message = (attempt == 1
                 ? "Sending…  \(clock)   در حال ارسال"
-                : "Retrying \(attempt)/\(total)…  \(clock)"
+                : "Retrying \(attempt)/\(total)…  \(clock)") + "\n\(Self.cancelHint)"
             startPulse()
+        case .cancelled:
+            stage = .done
+            message = "Cancelled — recording kept in Recordings\nلغو شد — صدا ذخیره شد"
+            stopPulse()
         case .inserted:
             stage = .done
             message = "✓"
@@ -329,6 +335,10 @@ private final class HUDContentView: NSView {
         ]
         (text as NSString).draw(at: point, withAttributes: attributes)
     }
+
+    /// Shown while sending, because a cancel nobody knows about is no way out.
+    /// The panel ignores mouse events, so the trigger is the control.
+    static let cancelHint = "Press again to cancel · برای لغو دوباره بزن"
 
     static func mmss(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())

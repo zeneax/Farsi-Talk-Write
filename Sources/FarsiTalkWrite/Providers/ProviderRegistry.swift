@@ -157,7 +157,7 @@ enum ProviderRegistry {
                 }
                 guard again, attempt < attempts else { throw error }
                 FTWLog.warn("Rescue attempt \(attempt)/\(attempts) failed: \(error.localizedDescription)")
-                try? await Task.sleep(nanoseconds: 700_000_000)
+                try await Task.sleep(nanoseconds: 700_000_000)
             }
         }
         throw ProviderError.emptyResponse
@@ -186,6 +186,9 @@ enum ProviderRegistry {
                     FTWLog.info("Transcription succeeded on attempt \(attempt)/\(attempts).")
                 }
                 return result
+            } catch is CancellationError {
+                // The person cancelled. Not a failure to retry or fall back from.
+                throw CancellationError()
             } catch let error as ProviderError {
                 guard error.isTransient else { throw error }
                 lastError = error
@@ -198,7 +201,7 @@ enum ProviderRegistry {
             if attempt < attempts {
                 // Back off a little between tries so a rate limit has a chance to
                 // clear rather than being hammered.
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
             }
         }
 

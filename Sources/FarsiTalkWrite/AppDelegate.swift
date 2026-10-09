@@ -151,7 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         let toggle = NSMenuItem(
-            title: controller.state.isRecording ? "Stop Recording" : "Start Dictation",
+            title: controller.state.isRecording ? "Stop Recording"
+                : controller.state.isTranscribing ? "Cancel Sending" : "Start Dictation",
             action: #selector(dockToggleRecording), keyEquivalent: ""
         )
         toggle.target = self

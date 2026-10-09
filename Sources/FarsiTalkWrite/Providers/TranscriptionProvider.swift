@@ -238,6 +238,11 @@ enum ProviderHTTP {
         do {
             (data, response) = try await session(timeout: timeout).data(for: request)
         } catch {
+            // A cancelled request surfaces as URLError.cancelled. Wrapped as a
+            // network error it would count as transient, and the person who
+            // pressed Cancel would sit through every retry, the fallback and the
+            // rescue engine before anything stopped.
+            if Task.isCancelled { throw CancellationError() }
             throw ProviderError.network(error.localizedDescription)
         }
 

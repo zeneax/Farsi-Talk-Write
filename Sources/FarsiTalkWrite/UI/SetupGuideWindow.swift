@@ -141,6 +141,9 @@ final class SetupGuideWindow: NSObject, NSWindowDelegate {
             dictationStatusLabel.stringValue =
                 "No speech heard — nothing was sent. Try speaking closer to the microphone."
             dictationStatusLabel.textColor = .systemOrange
+        case .cancelled:
+            dictationStatusLabel.stringValue = "Cancelled — the recording is kept in Recordings."
+            dictationStatusLabel.textColor = .secondaryLabelColor
         case .failed(let why):
             dictationStatusLabel.stringValue = "✗ \(why)"
             dictationStatusLabel.textColor = .systemRed
