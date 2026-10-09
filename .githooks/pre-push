@@ -26,7 +26,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       printf '%s\n' "$who" | sed 's/^/    /' >&2
       status=1
     fi
-    if printf '%s\n' "$msg" | grep -qiE '^co-authored-by:.*(claude|anthropic)|generated with \[?claude code|^🤖'; then
+    if printf '%s\n' "$msg" | grep -qiE '^co-authored-by:.*(claude|anthropic)|^(🤖 *)?generated with \[?claude code|^🤖'; then
       echo "pre-push: $(git log -1 --format='%h %s' "$c") carries AI attribution in its message." >&2
       status=1
     fi
