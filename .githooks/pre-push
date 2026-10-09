@@ -1,0 +1,39 @@
+#!/bin/sh
+# Commits here are authored by Shahram / Zeneax and nobody else.
+#
+# commit-msg strips AI attribution when a commit is written, but a commit can
+# arrive without passing through it: a clone where core.hooksPath was never
+# set, a rebase or cherry-pick that kept an old message, `--no-verify`. This is
+# the last point before anything becomes public, so it refuses rather than
+# edits: a push that would publish an AI trailer, or a commit whose author or
+# committer is an AI identity, does not leave the machine.
+zero=0000000000000000000000000000000000000000
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue          # deleting a branch
+  if [ "$remote_sha" = "$zero" ]; then
+    range="$local_sha --not --remotes"            # new branch: only unpublished commits
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  for c in $(git rev-list $range); do
+    who=$(git log -1 --format='%an <%ae>%n%cn <%ce>' "$c")
+    msg=$(git log -1 --format='%B' "$c")
+    if printf '%s\n' "$who" | grep -qiE 'claude|anthropic'; then
+      echo "pre-push: $(git log -1 --format='%h %s' "$c") is authored or committed by an AI identity:" >&2
+      printf '%s\n' "$who" | sed 's/^/    /' >&2
+      status=1
+    fi
+    if printf '%s\n' "$msg" | grep -qiE '^co-authored-by:.*(claude|anthropic)|generated with \[?claude code|^🤖'; then
+      echo "pre-push: $(git log -1 --format='%h %s' "$c") carries AI attribution in its message." >&2
+      status=1
+    fi
+  done
+done
+
+if [ "$status" -ne 0 ]; then
+  echo "pre-push: refused. Reword or re-author those commits, then push again." >&2
+fi
+exit $status

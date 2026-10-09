@@ -483,7 +483,18 @@ A `commit-msg` hook in `.githooks/` strips these as a backstop, and prints
 `commit-msg: removed AI attribution.` when it fires. It is a safety net, not the
 rule — if it ever fires, something upstream ignored the paragraph above.
 
-The hook is only active once per clone, because Git does not ship hook
+A `pre-push` hook beside it is the last gate before anything is public. It
+refuses, rather than edits, a push containing a commit whose message carries an
+AI trailer or whose author or committer is an AI identity — the cases that skip
+`commit-msg`: a rebase or cherry-pick that kept an old message, `--no-verify`,
+a commit made in a clone without the hooks. Do not bypass it with
+`--no-verify`; reword the commit.
+
+Neither hook should ever have to fire: Claude Code's own attribution is
+switched off in the user's `~/.claude/settings.json` (`attribution` set to
+empty strings), so nothing asks for a trailer in the first place.
+
+The hooks are only active once per clone, because Git does not ship hook
 configuration with a repository:
 
 ```sh
