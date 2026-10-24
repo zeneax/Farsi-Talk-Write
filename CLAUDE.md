@@ -323,8 +323,12 @@ networks, and OpenRouter is the default because of it.
 content_filter`, `native_finish_reason: SAFETY`, usually zero output tokens —
 on business dictation at temperature 0, with nothing anyone would call
 unsafe. The Mazarix site measured 1 of 51 dictations and 9 of 37 meeting
-pieces. It is not retryable (identical bytes meet the identical filter) and it
-is not the end: the same audio goes to a **second engine** on OpenRouter's
+pieces. It is not retryable — identical bytes *usually* meet the identical
+filter: on 2026-10-24 one clip sent twice was stopped both times at exactly 71
+characters. Usually, not always: another, re-sent from Recordings the same day,
+went through on the third send after a filtered second one. So a manual
+re-send can succeed, but an automatic retry of the first engine is still not
+worth its latency, and it is not the end: the same audio goes to a **second engine** on OpenRouter's
 `audio/transcriptions` endpoint, a dedicated speech-to-text model with no
 filter, no prompt and no reasoning. Which engine, on which outcomes, with which
 language hint is kernel data (`request.rescue` in `kernel/timing.json`, with

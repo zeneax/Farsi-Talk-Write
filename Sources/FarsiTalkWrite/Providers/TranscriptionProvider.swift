@@ -105,10 +105,12 @@ enum ProviderError: LocalizedError {
             The provider's safety filter stopped the transcript.
 
             This happens on ordinary speech and is not about anything you said — \
-            the same recording sent again meets the same filter, so it was sent \
-            to a second engine instead, and that one could not answer either.\(kept)
+            the same recording sent again usually meets the same filter, so it \
+            was sent to a second engine instead, and that one could not answer \
+            either.\(kept)
 
-            The recording is kept. Open Recordings to send it again.
+            The recording is kept. Open Recordings to send it again — sometimes \
+            it goes through on a later try.
             """
 
         case .malformedResponse(let detail):
