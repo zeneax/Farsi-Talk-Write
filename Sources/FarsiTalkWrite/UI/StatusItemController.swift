@@ -312,9 +312,10 @@ final class StatusItemController {
         case .recording(let elapsed, _):
             return "Recording \(Self.mmss(elapsed)) / \(Self.mmss(config.recording.maxSeconds))"
         case .transcribing(let attempt, let total, let elapsed):
-            return attempt == 1
-                ? String(format: "Sending… %.0fs", elapsed)
-                : String(format: "Retrying %d/%d… %.0fs", attempt, total, elapsed)
+            if attempt > 1 { return String(format: "Retrying %d/%d… %.0fs", attempt, total, elapsed) }
+            return elapsed >= RecordingHUD.slowAfterSeconds
+                ? String(format: "Server is slow, still working… %.0fs", elapsed)
+                : String(format: "Sending… %.0fs", elapsed)
         case .transcribingChunks(let done, let total):
             return "Sending \(done)/\(total) parts…"
         case .inserted:

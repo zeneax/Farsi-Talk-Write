@@ -156,6 +156,16 @@ final class DictationController {
         // but wait. Every trigger path (hotkey, Dock, menu bar) arrives here, so
         // pressing it again is the cancel.
         if state.isTranscribing {
+            // A press this soon after sending began was meant for the recording,
+            // not the send: the 60-second cap stops the recording on its own,
+            // and the "stop" press the person makes at the same moment used to
+            // land here and cancel it (twice in the log, both 0.0s after a
+            // time-cap stop).
+            if let started = transcribeStartedAt,
+               Date().timeIntervalSince(started) < Self.cancelGraceSeconds {
+                FTWLog.info("Ignoring trigger — sending began \(String(format: "%.1f", Date().timeIntervalSince(started)))s ago; too soon to be a cancel.")
+                return
+            }
             cancelTranscription()
             return
         }
@@ -200,6 +210,10 @@ final class DictationController {
     func toggle() {
         if state.isRecording { stop() } else { start() }
     }
+
+    /// How long after sending begins a trigger is still read as the end of the
+    /// recording rather than a cancel.
+    private static let cancelGraceSeconds: TimeInterval = 1.5
 
     /// The in-flight transcription, kept so it can be cancelled.
     private var transcription: Task<Void, Never>?

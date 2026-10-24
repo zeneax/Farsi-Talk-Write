@@ -29,6 +29,13 @@ import AppKit
 @MainActor
 final class RecordingHUD {
 
+    /// Past this, the send is slow rather than normal, and the HUD says so.
+    /// Measured over 508 sends: a full minute of audio averaged 8.3s and never
+    /// passed 23s, but on a bad hour the model took ~30s for 50s of audio and
+    /// answered every time. A clock alone read as a hang, and two answers that
+    /// were seconds away got cancelled; saying "slow" is the cue to wait.
+    static let slowAfterSeconds: TimeInterval = 20
+
     private var panel: NSPanel?
     private let contentView = HUDContentView()
     private var fadeTimer: Timer?
@@ -188,9 +195,15 @@ private final class HUDContentView: NSView {
         case .transcribing(let attempt, let total, let elapsed):
             stage = .transcribing
             let clock = String(format: "%.0fs", elapsed)
-            message = (attempt == 1
-                ? "Sending…  \(clock)   در حال ارسال"
-                : "Retrying \(attempt)/\(total)…  \(clock)") + "\n\(Self.cancelHint)"
+            let first: String
+            if attempt > 1 {
+                first = "Retrying \(attempt)/\(total)…  \(clock)"
+            } else if elapsed >= RecordingHUD.slowAfterSeconds {
+                first = "Server is slow, still working…  \(clock)"
+            } else {
+                first = "Sending…  \(clock)   در حال ارسال"
+            }
+            message = first + "\n\(Self.cancelHint)"
             startPulse()
         case .cancelled:
             stage = .done
